@@ -6,3 +6,7 @@ python-multipart
 matplotlib
 python-docx
 requests
+requests_async
+re
+json
+urllib.parse
