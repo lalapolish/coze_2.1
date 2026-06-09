@@ -5,6 +5,5 @@ openpyxl
 python-multipart
 matplotlib
 python-docx
-re
 json
 
