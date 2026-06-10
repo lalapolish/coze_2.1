@@ -192,14 +192,39 @@ def process_smart(doc, text):
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
+        # 逐章节处理
+        has_content = False
         for i in range(2, 8):
             txt = getattr(input_data, f"ch{i}_text", "")
-            if txt: process_smart(doc, txt)
+            if txt and txt.strip():
+                process_smart(doc, txt)
+                has_content = True
+        
+        if not has_content:
+            return {"file": "", "message": "输入内容为空", "status": "error"}
+
+        # 生成随机文件名
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
-        doc.save(os.path.join("static", fname))
-        return {"status": "success", "file_url": f"{str(request.base_url).rstrip('/')}/static/{fname}"}
+        static_dir = "static"
+        if not os.path.exists(static_dir):
+            os.makedirs(static_dir)
+            
+        full_path = os.path.join(static_dir, fname)
+        doc.save(full_path)
+        
+        # 拼接完整的下载 URL
+        # 这里的 key 必须叫做 file，才能对应你在工作流里定义的输出变量名
+        file_url = f"{str(request.base_url).rstrip('/')}/static/{fname}"
+        
+        return {
+            "file": file_url,  # 这里的键名必须与插件面板定义的输出参数名一致
+            "filename": fname,
+            "status": "success"
+        }
     except Exception as e:
-        return {"status": "error", "message": str(e)}
+        # 即使报错也建议返回一个空的 file 字段防止 workflow 彻底卡死
+        return {"file": "", "status": "error", "message": str(e)}
+
 
 if __name__ == "__main__":
     import uvicorn
