@@ -3,14 +3,17 @@ import io
 import os
 import uuid
 import pandas as pd
+import matplotlib
+matplotlib.use('Agg')  # 必须在 pyplot 导入前，适配无界面环境
 import matplotlib.pyplot as plt
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
 from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 app = FastAPI(openapi_version="3.0.0")
@@ -27,32 +30,56 @@ class ReportInput(BaseModel):
     ch6_text: Optional[str] = ""
     ch7_text: Optional[str] = ""
 
-# --- 绘图配置 (增加兼容性) ---
-try:
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS'] 
-except:
-    pass
+# --- 绘图配置 ---
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS']
 plt.rcParams['axes.unicode_minus'] = False
-BLUE_COLOR = 'royalblue'
-GROUPED_COLORS = ['#4472C4', '#ED7D31', '#FFC000', '#70AD47', '#25B6C7']
+
+def set_table_border(table):
+    """设置学术三线表：顶线、底线 1.5pt，栏目线 0.75pt"""
+    def set_cell_border(cell, **kwargs):
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        for edge in ('top', 'start', 'bottom', 'end'):
+            if edge in kwargs:
+                tag = 'w:{}'.format(edge)
+                element = tcPr.find(qn(tag))
+                if element is None:
+                    element = OxmlElement(tag)
+                    tcPr.append(element)
+                for key, val in kwargs[edge].items():
+                    element.set(qn('w:{}'.format(key)), str(val))
+
+    # 先清除所有边框
+    for row in table.rows:
+        for cell in row.cells:
+            set_cell_border(cell, top={'sz': 0, 'val': 'none'}, bottom={'sz': 0, 'val': 'none'}, 
+                            start={'sz': 0, 'val': 'none'}, end={'sz': 0, 'val': 'none'})
+
+    # 设置第一行（顶线）
+    for cell in table.rows[0].cells:
+        set_cell_border(cell, top={'sz': 12, 'val': 'single', 'color': '000000'})
+    
+    # 设置第一行底部（栏目线）
+    for cell in table.rows[0].cells:
+        set_cell_border(cell, bottom={'sz': 6, 'val': 'single', 'color': '000000'})
+
+    # 设置最后一行底部（底线）
+    for cell in table.rows[-1].cells:
+        set_cell_border(cell, bottom={'sz': 12, 'val': 'single', 'color': '000000'})
 
 def clean_data(text):
     if pd.isna(text): return 0
     val = str(text).replace('$', '').replace(',', '').replace('%', '').replace('*', '').strip()
     try:
-        if '.' in val: return float(val)
-        return int(val)
+        return float(val) if '.' in val else int(val)
     except:
         return val
 
 def md_table_to_df(md_text):
-    # 过滤掉空行，只保留带 | 的行
     lines = [l.strip() for l in md_text.strip().split('\n') if '|' in l]
     if len(lines) < 2: return None
-    # 提取表头
     headers = [re.sub(r'[\$\*]', '', c).strip() for c in lines[0].split('|') if c.strip()]
     data = []
-    # 寻找数据行（跳过表头和分隔行 ---|---）
     for line in lines:
         if '---' in line or line == lines[0]: continue
         row = [clean_data(c) for c in line.split('|') if c.strip()]
@@ -60,113 +87,111 @@ def md_table_to_df(md_text):
             data.append(row[:len(headers)])
     return pd.DataFrame(data, columns=headers) if data else None
 
-def generate_chart(df, title, fig_no):
+def generate_chart(df, title):
     plt.figure(figsize=(9, 5))
     img_stream = io.BytesIO()
     try:
-        # 简单逻辑：如果第一列是年份或类别，第二列是数值
         x_data = df.iloc[:, 0].astype(str)
         y_data = pd.to_numeric(df.iloc[:, 1], errors='coerce').fillna(0)
         
-        if fig_no in [4, 5] or "分布" in title or "占比" in title:
+        if any(kw in title for kw in ["分布", "占比", "结构"]):
             plt.pie(y_data, labels=x_data, autopct='%1.1f%%', colors=plt.cm.Pastel1.colors)
         else:
-            bars = plt.bar(x_data, y_data, color=BLUE_COLOR, width=0.6)
-            for bar in bars:
-                plt.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{bar.get_height()}', ha='center', va='bottom')
+            plt.bar(x_data, y_data, color='royalblue', width=0.5)
+            for i, v in enumerate(y_data):
+                plt.text(i, v, str(v), ha='center', va='bottom')
         
         plt.title(title, fontsize=12, pad=15)
-        plt.xticks(rotation=15 if len(x_data) > 5 else 0)
         plt.tight_layout()
         plt.savefig(img_stream, format='png', dpi=200)
-    finally: 
-        plt.close()
+    finally: plt.close()
     img_stream.seek(0)
     return img_stream
 
-def set_style(obj, is_title=False):
-    if hasattr(obj, 'runs'):
-        for run in obj.runs:
-            run.font.size = Pt(14 if is_title else 12)
-            run.font.name = '宋体'
-            run._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+def set_run_font(run, size=12, bold=False):
+    run.font.size = Pt(size)
+    run.font.name = '宋体'
+    run.bold = bold
+    run._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
 
 def process_content(doc, full_text):
-    # --- 核心优化：更强大的切分正则 ---
-    # 匹配 ##标题、图表标记（支持星号可选、冒号可选）、Markdown表格
-    parts = re.split(r'(##+ .*?|(?:\*\*?)?[图表]\s?\d+[:：].*?(?:\*\*?)?|(?:\n|^)\|.*\|(?:\n|$))', full_text, flags=re.S)
+    # 【核心修复】强制在所有标题和表格符号前加换行，解决粘连问题
+    full_text = re.sub(r'([^\n])\s*(\|)', r'\1\n\2', full_text)
+    full_text = re.sub(r'([^\n])\s*(\*\*?[图表]\s?\d+[:：])', r'\1\n\2', full_text)
+    
+    # 按照 标题、图表题、表格 进行切割
+    parts = re.split(r'(##+ .*?\n|(?:\*\*?)?[图表]\s?\d+[:：].*?\n|(?:\n|^)\|[\s\S]*?\|(?:\n|$))', full_text)
     
     current_fig_title = None
     
     for part in parts:
         if not part or not part.strip(): continue
-        part_s = part.strip()
+        p_text = part.strip()
         
-        # 1. 处理标题
-        if part_s.startswith('##'):
-            h = doc.add_heading(part_s.replace('#','').strip(), level=2)
-            set_style(h, True)
+        # 1. 标题
+        if p_text.startswith('##'):
+            h = doc.add_heading('', level=2)
+            run = h.add_run(p_text.replace('#','').strip())
+            set_run_font(run, 14, True)
             
-        # 2. 处理图表标记 (例如: 图 1: xxx)
-        elif re.match(r'(\*\*?)?[图表]\s?\d+[:：]', part_s):
-            current_fig_title = part_s.replace('*', '')
+        # 2. 图表题 (例如 图 1: xxx)
+        elif re.match(r'(\*\*?)?[图表]\s?\d+[:：]', p_text):
+            current_fig_title = p_text.replace('*', '').strip()
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(current_fig_title)
-            run.bold = True
-            set_style(p)
+            set_run_font(run, 11, True)
             
-        # 3. 处理表格内容
-        elif part_s.startswith('|'):
-            df = md_table_to_df(part_s)
+        # 3. 表格/绘图
+        elif p_text.startswith('|'):
+            df = md_table_to_df(p_text)
             if df is not None:
-                if current_fig_title and ("图" in current_fig_title):
+                if current_fig_title and "图" in current_fig_title:
                     try:
-                        fig_no_match = re.search(r'\d+', current_fig_title)
-                        fig_no = int(fig_no_match.group()) if fig_no_match else 0
-                        img = generate_chart(df, current_fig_title, fig_no)
+                        img = generate_chart(df, current_fig_title)
                         doc.add_picture(img, width=Inches(5.5))
                         doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    except Exception as e:
-                        print(f"绘图失败: {e}")
+                    except: pass
                     current_fig_title = None 
                 else:
-                    # 插入普通 Word 表格
+                    # 插入三线表
                     table = doc.add_table(rows=1, cols=len(df.columns))
-                    table.style = 'Table Grid'
-                    for i, col in enumerate(df.columns): table.rows[0].cells[i].text = str(col)
-                    for _, row in df.iterrows():
+                    table.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    # 表头
+                    for i, col in enumerate(df.columns):
+                        cell = table.rows[0].cells[i]
+                        cell.text = str(col)
+                        set_run_font(cell.paragraphs[0].runs[0], 10.5, True)
+                    # 数据
+                    for _, row_data in df.iterrows():
                         row_cells = table.add_row().cells
-                        for i, val in enumerate(row): row_cells[i].text = str(val)
-            
-        # 4. 处理普通文本
+                        for i, val in enumerate(row_data):
+                            row_cells[i].text = str(val)
+                            set_run_font(row_cells[i].paragraphs[0].runs[0], 10.5)
+                    set_table_border(table)
+        
+        # 4. 普通正文
         else:
-            p = doc.add_paragraph(part_s.replace('$', ''))
-            set_style(p)
+            clean_txt = p_text.replace('$', '').replace('***', '')
+            if len(clean_txt) > 2:
+                p = doc.add_paragraph()
+                run = p.add_run(clean_txt)
+                set_run_font(run)
 
 @app.post("/generate_report_word")
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
-        # 依次处理 2-7 章
         for i in range(2, 8):
-            content = getattr(input_data, f"ch{i}_text", "")
-            if content and len(content.strip()) > 5:
-                process_content(doc, content)
+            txt = getattr(input_data, f"ch{i}_text", "")
+            if txt: process_content(doc, txt)
         
-        file_id = uuid.uuid4().hex[:8]
-        file_name = f"report_{file_id}.docx"
-        file_path = os.path.join("static", file_name)
-        doc.save(file_path)
-        
-        base_url = str(request.base_url).rstrip('/')
-        return {
-            "status": "success",
-            "file_url": f"{base_url}/static/{file_name}",
-            "message": "文档生成成功"
-        }
+        fname = f"report_{uuid.uuid4().hex[:8]}.docx"
+        fpath = os.path.join("static", fname)
+        doc.save(fpath)
+        return {"status": "success", "file_url": f"{str(request.base_url).rstrip('/')}/static/{fname}"}
     except Exception as e:
-        return {"status": "error", "message": f"生成失败: {str(e)}"}
+        return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
