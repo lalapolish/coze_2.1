@@ -2,6 +2,7 @@ import re
 import io
 import os
 import uuid
+import numpy as np
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
@@ -30,8 +31,8 @@ class ReportInput(BaseModel):
     ch6_text: Optional[str] = ""
     ch7_text: Optional[str] = ""
 
-# 绘图配置 (尝试适配 Linux)
-plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Liberation Sans', 'Arial']
+# 环境字体设定
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 def set_font(run, size=12, bold=False):
@@ -44,20 +45,46 @@ def set_font(run, size=12, bold=False):
     rPr.append(rFonts)
 
 def set_full_border(table):
-    """为表格添加全边框"""
+    """表格全边框"""
     for row in table.rows:
         for cell in row.cells:
             tcPr = cell._tc.get_or_add_tcPr()
-            for border_name in ['top', 'bottom', 'left', 'right']:
-                edge = OxmlElement(f'w:{border_name}')
+            for b in ['top', 'bottom', 'left', 'right']:
+                edge = OxmlElement(f'w:{b}')
                 edge.set(qn('w:val'), 'single')
-                edge.set(qn('w:sz'), '4') # 0.5 磅
-                edge.set(qn('w:space'), '0')
-                edge.set(qn('w:color'), 'auto')
+                edge.set(qn('w:sz'), '4') 
                 tcPr.append(edge)
 
+def clean_table_text(text):
+    """严格清洗：只保留数字、字母、中文、百分号、点、括号"""
+    if not text: return ""
+    # \w 包含数字、字母、中文
+    return re.sub(r'[^\w%\.\(\)]', '', str(text))
+
+def draw_advanced_pie(ax, values, labels):
+    """绘制带指引线的饼图"""
+    wedges, texts = ax.pie(values, wedgeprops=dict(width=0.5), startangle=-40)
+    
+    bbox_props = dict(boxstyle="square,pad=0.3", fc="w", ec="k", lw=0.72)
+    kw = dict(arrowprops=dict(arrowstyle="-"), bbox=bbox_props, zorder=0, va="center")
+
+    total = sum(values)
+    for i, p in enumerate(wedges):
+        ang = (p.theta2 - p.theta1)/2. + p.theta1
+        y = np.sin(np.deg2rad(ang))
+        x = np.cos(np.deg2rad(ang))
+        horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
+        connectionstyle = f"angle,angleA=0,angleB={ang}"
+        kw["arrowprops"].update({"connectionstyle": connectionstyle})
+        
+        # 标注内容：类别, 数值, 百分比
+        pct = values[i]/total*100
+        val_str = f"{labels[i]}\n{int(values[i])}, {pct:.1f}%"
+        
+        ax.annotate(val_str, xy=(x, y), xytext=(1.35*np.sign(x), 1.4*y),
+                    horizontalalignment=horizontalalignment, **kw)
+
 def process_smart(doc, text):
-    # 预处理：删除干扰符
     text = text.replace('$$', '').replace('\r', '')
     lines = text.split('\n')
     
@@ -69,69 +96,79 @@ def process_smart(doc, text):
         nonlocal table_rows, current_title, is_chart_mode
         if not table_rows: return
         
-        data = []
+        raw_data = []
         for r in table_rows:
             cells = [c.strip() for c in r.split('|') if c.strip()]
-            if cells and '---' not in r: data.append(cells)
+            if cells and '---' not in r: raw_data.append(cells)
         
-        if len(data) >= 2:
+        if len(raw_data) >= 2:
             try:
+                df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+                # 提取标题中的数字
+                fig_num_match = re.search(r'\d+', current_title)
+                fig_num = int(fig_num_match.group()) if fig_num_match else 0
+
                 if is_chart_mode:
-                    # 绘图逻辑
-                    df = pd.DataFrame(data[1:], columns=data[0])
-                    plt.figure(figsize=(8, 4.5))
-                    x = df.iloc[:, 0].astype(str)
-                    y = pd.to_numeric(df.iloc[:, 1].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+                    fig, ax = plt.subplots(figsize=(9, 5))
+                    # 转换数值
+                    for col in df.columns[1:]:
+                        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                     
-                    if "比例" in current_title or "分布" in current_title:
-                        # 饼图：标注名称和百分比
-                        plt.pie(y, labels=x, autopct='%1.1f%%', startangle=140, colors=plt.cm.Paired.colors)
+                    # 判定逻辑
+                    is_pie = ("分布" in current_title or "比例" in current_title) and fig_num not in [3, 6]
+                    
+                    if is_pie:
+                        # 饼图模式
+                        draw_advanced_pie(ax, df.iloc[:, 1].values, df.iloc[:, 0].values)
+                        ax.set_xlim(-2, 2)
+                        ax.set_ylim(-1.5, 1.5)
                     else:
-                        # 柱状图
-                        bars = plt.bar(x, y, color='#4472C4', width=0.5)
-                        for bar in bars:
-                            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height(), 
-                                     f'{int(bar.get_height())}', ha='center', va='bottom', fontsize=9)
-                    
-                    # 关键修改：图片内部不写标题，避免黑框，标题由 Word 正文提供
+                        # 柱状图模式
+                        x_indices = np.arange(len(df))
+                        if len(df.columns) > 2:
+                            # 分组柱状图 (图 2, 12 等)
+                            width = 0.8 / (len(df.columns) - 1)
+                            for i, col in enumerate(df.columns[1:]):
+                                ax.bar(x_indices + i*width, df[col], width, label=col)
+                            ax.set_xticks(x_indices + width*(len(df.columns)-2)/2)
+                            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=5)
+                        else:
+                            # 普通柱状图
+                            ax.bar(df.iloc[:, 0].astype(str), df.iloc[:, 1], color='#4472C4', width=0.5)
+                            for i, val in enumerate(df.iloc[:, 1]):
+                                ax.text(i, val, f'{int(val)}', ha='center', va='bottom')
+
                     plt.tight_layout()
-                    
                     buf = io.BytesIO()
-                    plt.savefig(buf, format='png', dpi=150)
+                    plt.savefig(buf, format='png', dpi=180)
                     plt.close()
                     buf.seek(0)
-                    doc.add_picture(buf, width=Inches(5.2))
+                    doc.add_picture(buf, width=Inches(5.8))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 else:
-                    # 全框表格逻辑
-                    table = doc.add_table(rows=len(data), cols=len(data[0]))
+                    # 表格清洗与生成
+                    table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    for i, row_data in enumerate(data):
+                    for i, row_data in enumerate(raw_data):
                         for j, val in enumerate(row_data):
                             cell = table.cell(i, j)
-                            cell.text = val
-                            set_font(cell.paragraphs[0].runs[0], 10.5, i==0)
+                            # 严格清洗内容
+                            cell.text = clean_table_text(val)
+                            set_font(cell.paragraphs[0].runs[0], 10, i==0)
                     set_full_border(table)
             except Exception as e:
-                print(f"表格转换错误: {e}")
+                print(f"Error: {e}")
         
-        table_rows = []
-        is_chart_mode = False
-        current_title = ""
+        table_rows, is_chart_mode, current_title = [], False, ""
 
     for line in lines:
         l = line.strip()
         if not l: continue
-
-        # A. 识别标题 (##) - 不缩进
         if l.startswith('#'):
             flush_table()
-            level = min(l.count('#'), 3)
-            p = doc.add_heading('', level=level)
+            p = doc.add_heading('', level=min(l.count('#'), 3))
             run = p.add_run(l.replace('#', '').strip())
-            set_font(run, 15 - level, True)
-
-        # B. 识别图表说明 - 居中且不缩进
+            set_font(run, 14, True)
         elif re.match(r'(\*\*?)?[图表]\s?\d+[:：]', l):
             flush_table()
             current_title = l.replace('*', '').strip()
@@ -140,17 +177,12 @@ def process_smart(doc, text):
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(current_title)
             set_font(run, 11, True)
-
-        # C. 识别表格行
         elif l.startswith('|'):
             table_rows.append(l)
-
-        # D. 普通文本 - 设置首行缩进 2 字符
         else:
             if table_rows: flush_table()
             p = doc.add_paragraph()
-            # 设置首行缩进: 12pt字体下，2字符 = 24磅
-            p.paragraph_format.first_line_indent = Pt(24) 
+            p.paragraph_format.first_line_indent = Pt(24)
             run = p.add_run(l.replace('**', ''))
             set_font(run, 12)
 
@@ -160,14 +192,11 @@ def process_smart(doc, text):
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
-        # 设置默认节属性（如需设置页边距可在此处）
         for i in range(2, 8):
-            content = getattr(input_data, f"ch{i}_text", "")
-            if content: process_smart(doc, content)
-        
+            txt = getattr(input_data, f"ch{i}_text", "")
+            if txt: process_smart(doc, txt)
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
-        path = os.path.join("static", fname)
-        doc.save(path)
+        doc.save(os.path.join("static", fname))
         return {"status": "success", "file_url": f"{str(request.base_url).rstrip('/')}/static/{fname}"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
