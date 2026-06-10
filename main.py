@@ -49,12 +49,15 @@ def set_table_border(table):
                 for key, val in kwargs[edge].items():
                     element.set(qn('w:{}'.format(key)), str(val))
     
+    # 先清除所有边框
     for row in table.rows:
         for cell in row.cells:
             set_cell_border(cell, top={'sz': 0, 'val': 'none'}, bottom={'sz': 0, 'val': 'none'}, 
                             start={'sz': 0, 'val': 'none'}, end={'sz': 0, 'val': 'none'})
+    # 表头上下线
     for cell in table.rows[0].cells:
         set_cell_border(cell, top={'sz': 12, 'val': 'single'}, bottom={'sz': 6, 'val': 'single'})
+    # 表底线
     for cell in table.rows[-1].cells:
         set_cell_border(cell, bottom={'sz': 12, 'val': 'single'})
 
@@ -98,11 +101,22 @@ def set_font(run, size=12, bold=False):
     run._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
 
 def parse_and_write(doc, text):
-    """逐行扫描状态机：彻底解决识别不到的问题"""
-    lines = text.replace('\r', '').split('\n')
+    """逐行扫描状态机：修复标题识别、表格识别和换行问题"""
+    # 统一换行符并分割行
+    lines = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')
     table_buffer = []
     current_title = ""
-    
+    pending_text = ""  # 用于累积非表格的文本段落
+
+    def flush_pending_text():
+        """将累积的文本写入段落"""
+        nonlocal pending_text
+        if pending_text.strip():
+            p = doc.add_paragraph()
+            run = p.add_run(pending_text.strip())
+            set_font(run, 12)
+            pending_text = ""
+
     def flush_table():
         nonlocal table_buffer, current_title
         if not table_buffer: return
@@ -111,7 +125,7 @@ def parse_and_write(doc, text):
         rows = []
         for lb in table_buffer:
             cells = [c.strip() for c in lb.split('|') if c.strip()]
-            if cells and not all(hyphen in c for c in cells for hyphen in ['---']):
+            if cells and not all('---' in c for c in cells):
                 rows.append(cells)
         
         if len(rows) > 1:
@@ -138,50 +152,67 @@ def parse_and_write(doc, text):
 
     for line in lines:
         clean_line = line.strip()
-        if not clean_line: 
+        
+        # 空行：刷新文本和表格，实现段落分隔
+        if not clean_line:
+            flush_pending_text()
             flush_table()
             continue
         
-        # 1. 识别标题
+        # 1. 识别Markdown标题（# 开头）
         if clean_line.startswith('#'):
+            flush_pending_text()
             flush_table()
-            level = min(clean_line.count('#'), 3)
+            # 计算标题级别
+            level = 1
+            while level <= 3 and clean_line.startswith('#'*level):
+                level += 1
+            level -= 1
+            # 添加标题
+            title_text = clean_line.lstrip('#').strip()
             h = doc.add_heading('', level=level)
-            run = h.add_run(clean_line.replace('#', '').strip())
+            run = h.add_run(title_text)
             set_font(run, 16 - level*2, True)
-            
+            continue
+        
         # 2. 识别图表标题 (例如: 图 1：... 或 **表 1：...**)
-        elif re.match(r'(\*\*?)?[图表]\s?\d+[:：]', clean_line):
+        if re.match(r'(\*\*?)?[图表]\s?\d+[:：]', clean_line):
+            flush_pending_text()
             flush_table()
             current_title = clean_line.replace('*', '').strip()
             p = doc.add_paragraph()
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(current_title)
             set_font(run, 11, True)
-            
-        # 3. 识别表格行
-        elif clean_line.startswith('|'):
+            continue
+        
+        # 3. 识别表格行（以 | 开头）
+        if clean_line.startswith('|'):
+            flush_pending_text()
             table_buffer.append(clean_line)
-            
-        # 4. 普通正文
-        else:
-            if table_buffer: # 说明表格结束了
-                flush_table()
-            p = doc.add_paragraph()
-            run = p.add_run(clean_line.replace('$', ''))
-            set_font(run, 12)
-            
-    flush_table() # 扫描结束检查是否有残留表格
+            continue
+        
+        # 4. 普通正文：累积文本，避免逐行添加导致的换行问题
+        pending_text += clean_line + " "
+
+    # 循环结束后，刷新所有剩余内容
+    flush_pending_text()
+    flush_table()
 
 @app.post("/generate_report_word")
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
+        # 设置默认字体
+        doc.styles['Normal'].font.name = '宋体'
+        doc.styles['Normal']._element.rPr.rFonts.set(qn('w:eastAsia'), '宋体')
+        doc.styles['Normal'].font.size = Pt(12)
+        
         # 依次处理每一章
         chapters = [input_data.ch2_text, input_data.ch3_text, input_data.ch4_text, 
                     input_data.ch5_text, input_data.ch6_text, input_data.ch7_text]
         for ch in chapters:
-            if ch and len(ch) > 5:
+            if ch and len(ch.strip()) > 5:
                 parse_and_write(doc, ch)
         
         file_id = uuid.uuid4().hex[:8]
@@ -194,6 +225,8 @@ async def generate_report_word(input_data: ReportInput, request: Request):
             "file_url": f"{str(request.base_url).rstrip('/')}/static/{file_name}"
         }
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {"status": "error", "message": str(e)}
 
 if __name__ == "__main__":
