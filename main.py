@@ -30,8 +30,8 @@ class ReportInput(BaseModel):
     ch6_text: Optional[str] = ""
     ch7_text: Optional[str] = ""
 
-# 绘图配置
-plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Arial Unicode MS']
+# 绘图配置 (尝试适配 Linux)
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans', 'Liberation Sans', 'Arial']
 plt.rcParams['axes.unicode_minus'] = False
 
 def set_font(run, size=12, bold=False):
@@ -43,29 +43,21 @@ def set_font(run, size=12, bold=False):
     rFonts.set(qn('w:eastAsia'), '宋体')
     rPr.append(rFonts)
 
-def set_table_border(table):
-    """标准学术三线表"""
-    for row_idx, row in enumerate(table.rows):
+def set_full_border(table):
+    """为表格添加全边框"""
+    for row in table.rows:
         for cell in row.cells:
             tcPr = cell._tc.get_or_add_tcPr()
             for border_name in ['top', 'bottom', 'left', 'right']:
                 edge = OxmlElement(f'w:{border_name}')
-                # 顶线和底线 1.5磅(sz=12)，中间线 0.75磅(sz=6)
-                if border_name == 'top' and row_idx == 0:
-                    edge.set(qn('w:val'), 'single')
-                    edge.set(qn('w:sz'), '12')
-                elif border_name == 'bottom' and row_idx == 0:
-                    edge.set(qn('w:val'), 'single')
-                    edge.set(qn('w:sz'), '6')
-                elif border_name == 'bottom' and row_idx == len(table.rows) - 1:
-                    edge.set(qn('w:val'), 'single')
-                    edge.set(qn('w:sz'), '12')
-                else:
-                    edge.set(qn('w:val'), 'none')
+                edge.set(qn('w:val'), 'single')
+                edge.set(qn('w:sz'), '4') # 0.5 磅
+                edge.set(qn('w:space'), '0')
+                edge.set(qn('w:color'), 'auto')
                 tcPr.append(edge)
 
 def process_smart(doc, text):
-    # 1. 预处理：删掉干扰符号
+    # 预处理：删除干扰符
     text = text.replace('$$', '').replace('\r', '')
     lines = text.split('\n')
     
@@ -77,7 +69,6 @@ def process_smart(doc, text):
         nonlocal table_rows, current_title, is_chart_mode
         if not table_rows: return
         
-        # 提取有效数据
         data = []
         for r in table_rows:
             cells = [c.strip() for c in r.split('|') if c.strip()]
@@ -88,37 +79,39 @@ def process_smart(doc, text):
                 if is_chart_mode:
                     # 绘图逻辑
                     df = pd.DataFrame(data[1:], columns=data[0])
-                    plt.figure(figsize=(8, 4))
+                    plt.figure(figsize=(8, 4.5))
                     x = df.iloc[:, 0].astype(str)
-                    # 转换数字，处理逗号
                     y = pd.to_numeric(df.iloc[:, 1].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                     
-                    if "比例" in current_title or "分布" in current_title and len(x) < 10:
-                        plt.pie(y, labels=x, autopct='%1.1f%%', colors=plt.cm.Pastel1.colors)
+                    if "比例" in current_title or "分布" in current_title:
+                        # 饼图：标注名称和百分比
+                        plt.pie(y, labels=x, autopct='%1.1f%%', startangle=140, colors=plt.cm.Paired.colors)
                     else:
+                        # 柱状图
                         bars = plt.bar(x, y, color='#4472C4', width=0.5)
                         for bar in bars:
-                            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height(), f'{int(bar.get_height())}', ha='center', va='bottom', fontsize=8)
+                            plt.text(bar.get_x() + bar.get_width()/2, bar.get_height(), 
+                                     f'{int(bar.get_height())}', ha='center', va='bottom', fontsize=9)
                     
-                    plt.title(current_title, fontsize=10)
+                    # 关键修改：图片内部不写标题，避免黑框，标题由 Word 正文提供
                     plt.tight_layout()
                     
                     buf = io.BytesIO()
                     plt.savefig(buf, format='png', dpi=150)
                     plt.close()
                     buf.seek(0)
-                    doc.add_picture(buf, width=Inches(5))
+                    doc.add_picture(buf, width=Inches(5.2))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 else:
-                    # 三线表逻辑
+                    # 全框表格逻辑
                     table = doc.add_table(rows=len(data), cols=len(data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     for i, row_data in enumerate(data):
                         for j, val in enumerate(row_data):
                             cell = table.cell(i, j)
                             cell.text = val
-                            set_font(cell.paragraphs[0].runs[0], 10, i==0)
-                    set_table_border(table)
+                            set_font(cell.paragraphs[0].runs[0], 10.5, i==0)
+                    set_full_border(table)
             except Exception as e:
                 print(f"表格转换错误: {e}")
         
@@ -130,15 +123,15 @@ def process_smart(doc, text):
         l = line.strip()
         if not l: continue
 
-        # A. 识别标题 (##)
+        # A. 识别标题 (##) - 不缩进
         if l.startswith('#'):
             flush_table()
             level = min(l.count('#'), 3)
             p = doc.add_heading('', level=level)
             run = p.add_run(l.replace('#', '').strip())
-            set_font(run, 16 - level*2, True)
+            set_font(run, 15 - level, True)
 
-        # B. 识别图表说明 (图1: xxx)
+        # B. 识别图表说明 - 居中且不缩进
         elif re.match(r'(\*\*?)?[图表]\s?\d+[:：]', l):
             flush_table()
             current_title = l.replace('*', '').strip()
@@ -152,10 +145,12 @@ def process_smart(doc, text):
         elif l.startswith('|'):
             table_rows.append(l)
 
-        # D. 普通文本
+        # D. 普通文本 - 设置首行缩进 2 字符
         else:
             if table_rows: flush_table()
             p = doc.add_paragraph()
+            # 设置首行缩进: 12pt字体下，2字符 = 24磅
+            p.paragraph_format.first_line_indent = Pt(24) 
             run = p.add_run(l.replace('**', ''))
             set_font(run, 12)
 
@@ -165,6 +160,7 @@ def process_smart(doc, text):
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
+        # 设置默认节属性（如需设置页边距可在此处）
         for i in range(2, 8):
             content = getattr(input_data, f"ch{i}_text", "")
             if content: process_smart(doc, content)
