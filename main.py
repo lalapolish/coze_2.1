@@ -24,12 +24,14 @@ if not os.path.exists("static"):
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 class ReportInput(BaseModel):
+    ch1_text: Optional[str] = ""  # <--- 新增这一行
     ch2_text: Optional[str] = ""
     ch3_text: Optional[str] = ""
     ch4_text: Optional[str] = ""
     ch5_text: Optional[str] = ""
     ch6_text: Optional[str] = ""
     ch7_text: Optional[str] = ""
+
 
 # 环境字体设定
 plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
@@ -194,11 +196,13 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         doc = Document()
         # 逐章节处理
         has_content = False
-        for i in range(2, 8):
+        # 修改这里：将 range(2, 8) 改为 range(1, 8)
+        for i in range(1, 8): 
             txt = getattr(input_data, f"ch{i}_text", "")
             if txt and txt.strip():
                 process_smart(doc, txt)
                 has_content = True
+
         
         if not has_content:
             return {"file": "", "message": "输入内容为空", "status": "error"}
