@@ -34,7 +34,7 @@ class ReportInput(BaseModel):
     ch8_text: Optional[str] = "" 
 
 # 环境字体设定
-plt.rcParams['font.sans-serif'] = ['DejaVu Sans'] # 注意：若环境无中文字体，中文可能显示为框，生产环境建议安装对应字体
+plt.rcParams['font.sans-serif'] = ['DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 def set_font(run, size=12, bold=False):
@@ -47,34 +47,44 @@ def set_font(run, size=12, bold=False):
     rPr.append(rFonts)
 
 def set_three_line_table(table):
-    """学术三线表：顶线底线黑色 1.5pt，表头线 0.75pt"""
-    thick_size = '12' 
-    thin_size = '6'
+    """设置黑色加粗三线表"""
+    # sz 单位为 1/8 pt。18 代表 2.25pt (加粗), 8 代表 1pt (普通)
+    thick_sz = '18' 
+    thin_sz = '8'
+    color_val = '000000' # 纯黑色
+
     for i, row in enumerate(table.rows):
         for cell in row.cells:
             tcPr = cell._tc.get_or_add_tcPr()
-            for border in ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']:
-                tag = f'w:{border}'
+            # 清除旧边框
+            for b in ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']:
+                tag = f'w:{b}'
                 element = tcPr.find(qn(tag))
                 if element is not None: tcPr.remove(element)
+            
+            # 设置顶线
             if i == 0:
                 top = OxmlElement('w:top')
-                top.set(qn('w:val'), 'single'); top.set(qn('w:sz'), thick_size); top.set(qn('w:color'), '000000')
+                top.set(qn('w:val'), 'single'); top.set(qn('w:sz'), thick_sz); top.set(qn('w:color'), color_val)
                 tcPr.append(top)
-                bottom = OxmlElement('w:bottom')
-                bottom.set(qn('w:val'), 'single'); bottom.set(qn('w:sz'), thin_size); bottom.set(qn('w:color'), '000000')
-                tcPr.append(bottom)
+                # 设置表头线
+                btm = OxmlElement('w:bottom')
+                btm.set(qn('w:val'), 'single'); btm.set(qn('w:sz'), thin_sz); btm.set(qn('w:color'), color_val)
+                tcPr.append(btm)
+            # 设置底线
             if i == len(table.rows) - 1:
-                bottom = OxmlElement('w:bottom')
-                bottom.set(qn('w:val'), 'single'); bottom.set(qn('w:sz'), thick_size); bottom.set(qn('w:color'), '000000')
-                tcPr.append(bottom)
+                btm = OxmlElement('w:bottom')
+                btm.set(qn('w:val'), 'single'); btm.set(qn('w:sz'), thick_sz); btm.set(qn('w:color'), color_val)
+                tcPr.append(btm)
 
-def draw_solid_pie(ax, values, labels):
-    """绘制实心饼图：加粗大字体，无遮挡框"""
-    # 颜色循环
-    colors = plt.get_cmap('tab20c')(np.linspace(0, 1, len(values)))
+def draw_custom_pie(ax, values, labels):
+    """绘制指定六色的实心饼图，解决遮挡问题"""
+    # 指定颜色：蓝、橙、鹅黄、玫红、青绿、靛蓝
+    custom_colors = ['#4472C4', '#ED7D31', '#FFD966', '#E8307E', '#2EBB9F', '#2E3192']
+    
     # 绘制实心饼图
-    wedges, texts = ax.pie(values, startangle=-40, colors=colors)
+    wedges, _ = ax.pie(values, colors=custom_colors[:len(values)], startangle=90, 
+                       counterclock=False, wedgeprops={'edgecolor': 'white', 'linewidth': 1})
     
     total = sum(values)
     for i, p in enumerate(wedges):
@@ -82,19 +92,15 @@ def draw_solid_pie(ax, values, labels):
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
         
-        # 决定文字方向
-        horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
-        
-        # 设置百分比和标签
+        # 将标签和数值完全引向外部，避免遮挡
+        connectionstyle = f"angle,angleA=0,angleB={ang}"
         pct = values[i]/total*100
-        val_str = f"{labels[i]}\n{int(values[i])} ({pct:.1f}%)"
+        label_text = f"{labels[i]}\n{int(values[i])} ({pct:.1f}%)"
         
-        # 绘制指引线和文字（文字加粗 size=12）
-        ax.annotate(val_str, xy=(x, y), xytext=(1.3*np.sign(x), 1.3*y),
-                    horizontalalignment=horizontalalignment,
-                    arrowprops=dict(arrowstyle="-", color="black", lw=0.8),
-                    fontsize=12, fontweight='bold', color='black',
-                    va="center")
+        ax.annotate(label_text, xy=(x, y), xytext=(1.4*np.sign(x), 1.4*y),
+                    horizontalalignment='center' if abs(x) < 0.1 else ('left' if x > 0 else 'right'),
+                    arrowprops=dict(arrowstyle="-", color="black", connectionstyle=connectionstyle),
+                    fontsize=12, fontweight='bold', va='center')
 
 def process_smart(doc, text):
     text = text.replace('$$', '').replace('\r', '')
@@ -108,32 +114,29 @@ def process_smart(doc, text):
         if len(raw_data) >= 2:
             try:
                 df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
-                fig_num_match = re.search(r'\d+', current_title)
-                fig_num = int(fig_num_match.group()) if fig_num_match else 0
+                fig_num = int(re.search(r'\d+', current_title).group()) if re.search(r'\d+', current_title) else 0
                 if is_chart_mode:
-                    fig, ax = plt.subplots(figsize=(10, 6)) # 略微调大画布
+                    fig, ax = plt.subplots(figsize=(11, 7))
                     for col in df.columns[1:]:
                         df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
                     
                     if ("分布" in current_title or "比例" in current_title) and fig_num not in [3, 6]:
-                        draw_solid_pie(ax, df.iloc[:, 1].values, df.iloc[:, 0].values)
-                        ax.set_xlim(-2.2, 2.2) # 扩大坐标轴范围防止文字截断
-                        ax.set_ylim(-1.8, 1.8)
+                        draw_custom_pie(ax, df.iloc[:, 1].values, df.iloc[:, 0].values)
+                        ax.set_xlim(-2.5, 2.5); ax.set_ylim(-2.0, 2.0)
                     else:
-                        x_indices = np.arange(len(df))
+                        x_idx = np.arange(len(df))
                         if len(df.columns) > 2:
-                            width = 0.8 / (len(df.columns) - 1)
+                            w = 0.8/(len(df.columns)-1)
                             for i, col in enumerate(df.columns[1:]):
-                                ax.bar(x_indices + i*width, df[col], width, label=col)
-                            ax.set_xticks(x_indices + width*(len(df.columns)-2)/2)
-                            ax.set_xticklabels(df.iloc[:, 0].astype(str), fontweight='bold')
-                            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3)
+                                ax.bar(x_idx + i*w, df[col], w, label=col)
+                            ax.set_xticks(x_idx + w*(len(df.columns)-2)/2)
+                            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=3)
                         else:
                             ax.bar(df.iloc[:, 0].astype(str), df.iloc[:, 1], color='#4472C4', width=0.5)
-                            for i, val in enumerate(df.iloc[:, 1]):
-                                ax.text(i, val, f'{int(val)}', ha='center', va='bottom', fontweight='bold', fontsize=11)
+                            for i, v in enumerate(df.iloc[:, 1]):
+                                ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontweight='bold')
                     
-                    plt.tight_layout(pad=3.0) # 增加内边距防止显示不全
+                    plt.tight_layout(pad=4.0)
                     buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=180); plt.close(); buf.seek(0)
                     doc.add_picture(buf, width=Inches(5.8))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -166,21 +169,20 @@ def process_smart(doc, text):
         elif l.startswith('|'): table_rows.append(l)
         else:
             if table_rows: flush_table()
-            p = doc.add_paragraph()
-            p.paragraph_format.first_line_indent = Pt(24)
+            p = doc.add_paragraph(); p.paragraph_format.first_line_indent = Pt(24)
             run = p.add_run(l.replace('**', '')); set_font(run, 12)
     flush_table()
 
 def add_page_number(doc):
-    for section in doc.sections:
-        footer = section.footer
+    for sec in doc.sections:
+        footer = sec.footer
         p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run()
         fldChar1 = OxmlElement('w:fldChar'); fldChar1.set(qn('w:fldCharType'), 'begin')
         instrText = OxmlElement('w:instrText'); instrText.set(qn('xml:space'), 'preserve'); instrText.text = 'PAGE'
         fldChar2 = OxmlElement('w:fldChar'); fldChar2.set(qn('w:fldCharType'), 'end')
-        run._r.append(fldChar1); run._r.append(instrText); run._r.append(fldChar2)
+        run._r.extend([fldChar1, instrText, fldChar2])
 
 def add_cover(doc):
     for _ in range(4): doc.add_paragraph()
@@ -196,10 +198,11 @@ def add_toc(doc):
     instrText = OxmlElement('w:instrText'); instrText.set(qn('xml:space'), 'preserve'); instrText.text = 'TOC \\o "1-3" \\h \\z \\u'
     fldChar2 = OxmlElement('w:fldChar'); fldChar2.set(qn('w:fldCharType'), 'separate')
     fldChar3 = OxmlElement('w:fldChar'); fldChar3.set(qn('w:fldCharType'), 'end')
-    run_toc._r.append(fldChar1); run_toc._r.append(instrText); run_toc._r.append(fldChar2); run_toc._r.append(fldChar3)
+    run_toc._r.extend([fldChar1, instrText, fldChar2, fldChar3])
     doc.add_page_break()
 
 def force_update_fields(doc):
+    """强制 Word 弹出更新域（目录）提示"""
     element = doc.settings.element
     update_fields = OxmlElement('w:updateFields')
     update_fields.set(qn('w:val'), 'true')
