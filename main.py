@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from docx import Document
-from docx.shared import Pt, Inches, RGBColor
+from docx.shared import Pt, Inches
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -34,13 +34,13 @@ class ReportInput(BaseModel):
     ch7_text: Optional[str] = ""
     ch8_text: Optional[str] = "" 
 
-# ================= 解决图片方框：强制加载本地 SimHei.ttf =================
+# ================= 字体设置 =================
 font_path = os.path.join(os.getcwd(), 'SimHei.ttf')
 if os.path.exists(font_path):
     fm.fontManager.addfont(font_path)
     plt.rcParams['font.sans-serif'] = ['SimHei']
 else:
-    plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Arial Unicode MS', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 def set_font(run, size=12, bold=False):
@@ -53,37 +53,38 @@ def set_font(run, size=12, bold=False):
     rPr.append(rFonts)
 
 def set_three_line_table(table):
-    """设置学术标准的黑色三线表 (顶线/底线加粗，标题下线细)"""
-    def set_cell_border(cell, **kwargs):
-        tcPr = cell._tc.get_or_add_tcPr()
-        for side, params in kwargs.items():
-            tag = f'w:{side}'
-            element = OxmlElement(tag)
-            element.set(qn('w:val'), params.get('val', 'single'))
-            element.set(qn('w:sz'), str(params.get('sz', '4')))
-            element.set(qn('w:color'), params.get('color', '000000'))
-            tcPr.append(element)
+    """设置标准的黑色加粗三线表"""
+    thick_sz = '12' # 1.5磅
+    thin_sz = '4'   # 0.5磅
+    color_val = '000000' 
 
     for i, row in enumerate(table.rows):
         for cell in row.cells:
-            # 清除所有默认边框
             tcPr = cell._tc.get_or_add_tcPr()
+            # 移除所有边框
             for b in ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']:
                 tag = f'w:{b}'; element = tcPr.find(qn(tag))
                 if element is not None: tcPr.remove(element)
             
-            # 顶层加粗 (1.5pt = sz:12)
+            # 顶线
             if i == 0:
-                set_cell_border(cell, top={'sz': 12, 'color': '000000'}, bottom={'sz': 6, 'color': '000000'})
-            # 底层加粗 (1.5pt = sz:12)
+                t = OxmlElement('w:top')
+                t.set(qn('w:val'), 'single'); t.set(qn('w:sz'), thick_sz); t.set(qn('w:color'), color_val)
+                tcPr.append(t)
+                b = OxmlElement('w:bottom')
+                b.set(qn('w:val'), 'single'); b.set(qn('w:sz'), thin_sz); b.set(qn('w:color'), color_val)
+                tcPr.append(b)
+            # 底线
             elif i == len(table.rows) - 1:
-                set_cell_border(cell, bottom={'sz': 12, 'color': '000000'})
+                b = OxmlElement('w:bottom')
+                b.set(qn('w:val'), 'single'); b.set(qn('w:sz'), thick_sz); b.set(qn('w:color'), color_val)
+                tcPr.append(b)
 
 def draw_custom_pie(ax, values, labels):
-    """饼图：彻底解决数值重叠和方框问题"""
+    """饼图优化：解决A/B级重叠，去掉内部标签"""
     colors = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47']
     wedges, _ = ax.pie(values, colors=colors[:len(values)], startangle=90, counterclock=False, 
-                       wedgeprops={'edgecolor': 'white', 'linewidth': 1})
+                       wedgeprops={'edgecolor': 'white', 'linewidth': 1.5})
     
     total = sum(values)
     for i, p in enumerate(wedges):
@@ -91,29 +92,22 @@ def draw_custom_pie(ax, values, labels):
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
         
-        # 动态计算标签位置，防止靠得太近
-        va = "center"; ha = "left" if x > 0 else "right"
-        dist = 1.4  # 延伸长度
+        # 增加延伸距离，防止重叠
         connectionstyle = f"angle,angleA=0,angleB={ang}"
+        horizontalalignment = "left" if x > 0 else "right"
+        
+        # 对A级和B级这种可能非常接近的区域进行微调
+        y_offset = 1.35 * y
+        if abs(y) < 0.2: y_offset = 1.45 * y # 靠近水平线的进一步拉开
         
         label_text = f"{labels[i]}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
-        ax.annotate(label_text, xy=(x, y), xytext=(dist*np.sign(x), 1.3*y),
-                    horizontalalignment=ha, verticalalignment=va,
+        ax.annotate(label_text, xy=(x, y), xytext=(1.5*np.sign(x), y_offset),
+                    horizontalalignment=horizontalalignment,
                     arrowprops=dict(arrowstyle="-", color="black", connectionstyle=connectionstyle),
-                    fontsize=10, fontweight='bold')
-
-def add_page_number(doc):
-    for sec in doc.sections:
-        footer = sec.footer
-        p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = p.add_run()
-        fldChar1 = OxmlElement('w:fldChar'); fldChar1.set(qn('w:fldCharType'), 'begin')
-        instrText = OxmlElement('w:instrText'); instrText.set(qn('xml:space'), 'preserve'); instrText.text = 'PAGE'
-        fldChar2 = OxmlElement('w:fldChar'); fldChar2.set(qn('w:fldCharType'), 'end')
-        run._r.extend([fldChar1, instrText, fldChar2])
+                    fontsize=10, fontweight='bold', va='center')
 
 def process_smart(doc, text):
+    # 清理公式与符号
     text = text.replace('\\%', '%').replace('$$', '').replace('\r', '')
     text = re.sub(r'\([\d\.\+\-\*/\s]+\s*[≈=]\s*[\d\.\%]+\)', '', text)
     
@@ -123,99 +117,119 @@ def process_smart(doc, text):
     def flush_table():
         nonlocal table_rows, current_title, is_chart_mode
         if not table_rows: return
+        
+        # 解析数据，同时过滤包含“总计”或“合计”的行（用于绘图）
         raw_data = [[c.strip() for c in r.split('|') if c.strip()] for r in table_rows if '|' in r and '---' not in r]
         
         if len(raw_data) >= 2:
             try:
-                df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
                 fig_num_match = re.search(r'\d+', current_title)
                 fig_num = int(fig_num_match.group()) if fig_num_match else 0
                 
                 if is_chart_mode:
-                    fig, ax = plt.subplots(figsize=(10, 6))
+                    fig, ax = plt.subplots(figsize=(9, 5.5))
                     def clean(v):
                         s = re.sub(r'[^\d.]', '', str(v))
                         return float(s) if s else 0.0
 
-                    # 1. 饼图 (4, 5)
+                    # --- 图表逻辑优化 ---
+                    # 1. 饼图 (图 4, 5)
                     if fig_num in [4, 5]:
-                        v_list = [clean(v) for v in df.iloc[:, 1]]
-                        draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist())
-                        ax.set_xlim(-2.2, 2.2); ax.set_ylim(-1.5, 1.5)
+                        # 过滤掉合计行
+                        plot_data = [r for r in raw_data[1:] if '合计' not in r[0] and '总计' not in r[0]]
+                        v_list = [clean(r[1]) for r in plot_data]
+                        l_list = [r[0] for r in plot_data]
+                        draw_custom_pie(ax, v_list, l_list)
+                        ax.set_xlim(-2.5, 2.5); ax.set_ylim(-1.6, 1.6)
 
-                    # 2. 图 9 双轴图：优化重叠
-                    elif fig_num == 9:
-                        years = df.iloc[:, 0].astype(str).tolist()
-                        counts = [clean(v) for v in df.iloc[:, 1]]
-                        fundings = [clean(v) for v in df.iloc[:, 2]]
-                        ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
-                        ax.set_ylabel('立项数 (项)', fontsize=11, fontweight='bold')
-                        for i, v in enumerate(counts):
-                            ax.text(i, v + 2, f'{int(v)}', ha='center', va='bottom', fontweight='bold', color='#4472C4')
-                        
-                        ax2 = ax.twinx()
-                        ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
-                        ax2.set_ylabel('经费 (万元)', fontsize=11, fontweight='bold')
-                        for i, v in enumerate(fundings):
-                            ax2.text(i, v + 50, f'{v:.1f}', ha='center', va='bottom', color='#ED7D31', fontweight='bold')
-                        
-                        ax.set_ylim(0, max(counts)*1.3)
-                        ax2.set_ylim(0, max(fundings)*1.3)
-                        fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2)
-                        plt.subplots_adjust(top=0.88, bottom=0.15)
-
-                    # 3. 图 10, 11：强制单系列柱状图
+                    # 2. 图 10, 11：解决横向数据逻辑错误
                     elif fig_num in [10, 11]:
-                        # 只取年份和对应的总量（通常是第1或最后一列）
-                        x_labels = df.iloc[:, 0].astype(str).tolist()
-                        y_vals = [clean(v) for v in df.iloc[:, 1]]
+                        # 识别数据是否在第一行横向排列 (表头是年份)
+                        headers = [re.sub(r'[^\d]', '', h) for h in raw_data[0]]
+                        years = [h for h in headers if len(h) == 4] # 提取4位年份
+                        
+                        if len(years) > 1: # 说明年份在表头
+                            x_labels = years
+                            y_vals = [clean(v) for v in raw_data[1][1:]][:len(years)]
+                        else: # 说明年份在第一列
+                            x_labels = [r[0] for r in raw_data[1:]]
+                            y_vals = [clean(r[1]) for r in raw_data[1:]]
+                        
                         bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.5)
                         for bar in bars:
                             ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f'{int(bar.get_height())}', ha='center', va='bottom', fontweight='bold')
                         ax.set_ylabel('数量', fontweight='bold')
-                        ax.set_xlabel('年份', fontweight='bold')
 
-                    # 4. 图 12：多系列分组柱状图 (A-F级)
+                    # 3. 图 9 双轴图
+                    elif fig_num == 9:
+                        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+                        years = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
+                        counts = [clean(v) for v in df.iloc[:, 1]]
+                        fundings = [clean(v) for v in df.iloc[:, 2]]
+                        ax.bar(years, counts, color='#4472C4', width=0.5)
+                        ax2 = ax.twinx()
+                        ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2)
+                        ax.set_ylabel('立项数 (项)')
+                        ax2.set_ylabel('经费 (万元)')
+
+                    # 4. 图 12 分组柱状图
                     elif fig_num == 12:
-                        # 过滤非数据列，保留年份和各级列
-                        df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
-                        x_labels = df_plot.iloc[:, 0].astype(str).tolist()
-                        categories = [c for c in df_plot.columns[1:] if '合计' not in c]
-                        
+                        df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+                        df = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
+                        x_labels = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
+                        categories = [c for c in df.columns[1:] if '合计' not in c]
                         x = np.arange(len(x_labels))
-                        width = 0.75 / len(categories)
+                        width = 0.8 / len(categories)
                         for i, cat in enumerate(categories):
-                            vals = [clean(v) for v in df_plot[cat]]
-                            rects = ax.bar(x + i*width, vals, width, label=cat)
-                            for rect in rects:
-                                h = rect.get_height()
-                                if h > 0: ax.text(rect.get_x()+rect.get_width()/2, h, f'{int(h)}', ha='center', va='bottom', fontsize=8)
-                        
+                            vals = [clean(v) for v in df[cat]]
+                            ax.bar(x + i*width, vals, width, label=cat)
                         ax.set_xticks(x + width*(len(categories)-1)/2)
                         ax.set_xticklabels(x_labels)
-                        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=len(categories))
-                        ax.set_ylabel('获奖数量', fontweight='bold')
+                        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.1), ncol=3)
                         plt.subplots_adjust(bottom=0.2)
 
-                    # 其他通用图表
-                    else:
-                        vals = [clean(v) for v in df.iloc[:, 1]]
-                        ax.bar(df.iloc[:, 0].astype(str), vals, color='#4472C4', width=0.5)
-                        for i, v in enumerate(vals): ax.text(i, v, f'{int(v)}', ha='center', va='bottom')
-
-                    plt.title(current_title, fontsize=12, fontweight='bold', pad=15)
-                    buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(); buf.seek(0)
-                    doc.add_picture(buf, width=Inches(5.6))
+                    # 统一清理：移除X轴单位
+                    current_labels = [re.sub(r'（.*?）|\(.*?\)', '', str(tick.get_text())) for tick in ax.get_xticklabels()]
+                    ax.set_xticklabels(current_labels)
+                    
+                    # 关键修改：不再 plt.title
+                    plt.tight_layout()
+                    buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=180); plt.close(); buf.seek(0)
+                    doc.add_picture(buf, width=Inches(5.8))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                
                 else:
-                    table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
+                    # --- 表格逻辑优化 ---
+                    # 过滤总计行（表 15 等要求）
+                    filtered_data = [r for r in raw_data if not (len(r)>0 and ('总计' in r[0] or '合计' in r[0] and i != 0))]
+                    
+                    table = doc.add_table(rows=len(filtered_data), cols=len(filtered_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    for i, row in enumerate(raw_data):
-                        for j, val in enumerate(row):
-                            cell = table.cell(i, j); cell.text = val
-                            set_font(cell.paragraphs[0].runs[0] if cell.paragraphs[0].runs else cell.paragraphs[0].add_run(val), 10, i==0)
+                    
+                    for i, row_data in enumerate(filtered_data):
+                        # 检查是否是特殊行（表 10 的 B级/C级提示行）
+                        row_text = "".join(row_data)
+                        is_special_row = ("B级" in row_text or "C级" in row_text) and "发文数量" in row_text
+                        
+                        for j, val in enumerate(row_data):
+                            # 去掉星号
+                            clean_val = val.replace('*', '')
+                            cell = table.cell(i, j)
+                            cell.text = clean_val
+                            p = cell.paragraphs[0]
+                            
+                            # 设置居中：特殊行或者标题行
+                            if is_special_row or i == 0:
+                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            
+                            if p.runs:
+                                set_font(p.runs[0], 10, i==0 or is_special_row)
+                            else:
+                                set_font(p.add_run(clean_val), 10, i==0 or is_special_row)
+                                
                     set_three_line_table(table)
-            except Exception as e: print(f"Error processing {current_title}: {e}")
+            except Exception as e: print(f"Processing Error: {e}")
+            
         table_rows, is_chart_mode, current_title = [], False, ""
 
     for line in lines:
@@ -246,12 +260,22 @@ def add_toc(doc):
     run_toc._r.extend([fldChar1, instrText, fldChar2, fldChar3])
     doc.add_page_break()
 
+def add_page_number(doc):
+    for sec in doc.sections:
+        footer = sec.footer
+        p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        run = p.add_run()
+        fldChar1 = OxmlElement('w:fldChar'); fldChar1.set(qn('w:fldCharType'), 'begin')
+        instrText = OxmlElement('w:instrText'); instrText.set(qn('xml:space'), 'preserve'); instrText.text = 'PAGE'
+        fldChar2 = OxmlElement('w:fldChar'); fldChar2.set(qn('w:fldCharType'), 'end')
+        run._r.extend([fldChar1, instrText, fldChar2])
+
 @app.post("/generate_report_word")
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
-        element = doc.settings.element
-        update_fields = OxmlElement('w:updateFields'); update_fields.set(qn('w:val'), 'true'); element.append(update_fields)
+        doc.settings.element.append(OxmlElement('w:updateFields'))
         
         # 封面
         for _ in range(4): doc.add_paragraph()
