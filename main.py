@@ -7,6 +7,7 @@ import pandas as pd
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -33,8 +34,13 @@ class ReportInput(BaseModel):
     ch7_text: Optional[str] = ""
     ch8_text: Optional[str] = "" 
 
-# ================= 解决图片方框（中文字体）核心设定 =================
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Arial Unicode MS', 'DejaVu Sans']
+# ================= 解决图片方框：强制加载本地 SimHei.ttf =================
+font_path = os.path.join(os.getcwd(), 'SimHei.ttf')
+if os.path.exists(font_path):
+    fm.fontManager.addfont(font_path)
+    plt.rcParams['font.sans-serif'] = ['SimHei']
+else:
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
 def set_font(run, size=12, bold=False):
@@ -68,7 +74,7 @@ def set_three_line_table(table):
                 tcPr.append(btm)
 
 def draw_custom_pie(ax, values, labels):
-    """饼图：数值延伸、加粗、无遮挡"""
+    """饼图优化：数值延伸、加粗、解决遮挡"""
     colors = ['#4472C4', '#ED7D31', '#FFD966', '#E8307E', '#2EBB9F', '#2E3192']
     wedges, _ = ax.pie(values, colors=colors[:len(values)], startangle=90, counterclock=False, 
                        wedgeprops={'edgecolor': 'white', 'linewidth': 1.5})
@@ -78,7 +84,6 @@ def draw_custom_pie(ax, values, labels):
         ang = (p.theta2 - p.theta1)/2. + p.theta1
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
-        # 标签延伸逻辑
         horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
         connectionstyle = f"angle,angleA=0,angleB={ang}"
         label_text = f"{labels[i]}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
@@ -100,7 +105,6 @@ def add_page_number(doc):
         run._r.extend([fldChar1, instrText, fldChar2])
 
 def process_smart(doc, text):
-    # 清理计算公式和冗余符号，但保留 $$ 用于识别（或者根据需要移除）
     text = text.replace('\\%', '%').replace('$$', '').replace('\r', '')
     text = re.sub(r'\([\d\.\+\-\*/\s]+\s*[≈=]\s*[\d\.\%]+\)', '', text)
     
@@ -115,7 +119,8 @@ def process_smart(doc, text):
         if len(raw_data) >= 2:
             try:
                 df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
-                fig_num = int(re.search(r'\d+', current_title).group()) if re.search(r'\d+', current_title) else 0
+                fig_num_match = re.search(r'\d+', current_title)
+                fig_num = int(fig_num_match.group()) if fig_num_match else 0
                 
                 if is_chart_mode:
                     fig, ax = plt.subplots(figsize=(11, 7))
@@ -123,38 +128,38 @@ def process_smart(doc, text):
                         s = re.sub(r'[^\d.]', '', str(v))
                         return float(s) if s else 0.0
 
-                    # 1. 饼图逻辑 (图 4, 5)
+                    # 逻辑 1：图 4, 5 饼图
                     if fig_num in [4, 5]:
                         v_list = [clean(v) for v in df.iloc[:, 1]]
                         draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist())
                         ax.set_xlim(-2.2, 2.2); ax.set_ylim(-1.8, 1.8)
 
-                    # 2. 双轴图逻辑 (图 9)
+                    # 逻辑 2：图 9 双轴图 (立项数柱状 + 经费折线)
                     elif fig_num == 9:
                         years = df.iloc[:, 0].astype(str).tolist()
                         counts = [clean(v) for v in df.iloc[:, 1]]
                         fundings = [clean(v) for v in df.iloc[:, 2]]
+                        
                         ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
-                        ax.set_xlabel('年份', fontsize=12, fontweight='bold')
-                        ax.set_ylabel('立项数 (项)', fontsize=12, fontweight='bold')
+                        ax.set_xlabel('年份(publish_year)', fontsize=12, fontweight='bold')
+                        ax.set_ylabel('立项数(项)(count)', fontsize=12, fontweight='bold')
                         for i, v in enumerate(counts):
                             ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontweight='bold')
                         
                         ax2 = ax.twinx()
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
-                        ax2.set_ylabel('经费 (万元)', fontsize=12, fontweight='bold')
+                        ax2.set_ylabel('到账经费(万元)(received_funding)', fontsize=12, fontweight='bold')
                         for i, v in enumerate(fundings):
                             ax2.text(i, v, f'{v:.1f}', ha='center', va='bottom', color='#ED7D31', fontweight='bold')
-                        fig.legend(loc='upper center', bbox_to_anchor=(0.5, 0.95), ncol=2)
+                        fig.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=2)
 
-                    # 3. 柱状图逻辑 (含图 12)
+                    # 逻辑 3：其他柱状图（含图 12）
                     else:
-                        # 过滤掉合计项
                         cols = [c for c in df.columns if '合计' not in c and '总计' not in c]
                         df_plot = df[cols][~df.iloc[:, 0].str.contains('合计|总计', na=False)]
                         x_labels = df_plot.iloc[:, 0].astype(str).tolist()
                         
-                        if len(df_plot.columns) > 2: # 多系列柱状图
+                        if len(df_plot.columns) > 2: # 多系列（图 12）
                             x = np.arange(len(df_plot))
                             width = 0.8 / (len(df_plot.columns)-1)
                             for i, col in enumerate(df_plot.columns[1:]):
@@ -162,18 +167,18 @@ def process_smart(doc, text):
                                 rects = ax.bar(x + i*width, vals, width, label=col)
                                 for rect in rects:
                                     h = rect.get_height()
-                                    if h > 0: ax.text(rect.get_x()+rect.get_width()/2, h, f'{int(h)}', ha='center', va='bottom', fontsize=9)
+                                    if h > 0: ax.text(rect.get_x()+rect.get_width()/2, h, f'{int(h)}', ha='center', va='bottom', fontsize=9, fontweight='bold')
                             ax.set_xticks(x + width*(len(df_plot.columns)-2)/2)
                             ax.set_xticklabels(x_labels)
                             ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3)
-                        else: # 单系列柱状图
+                        else: # 单系列
                             vals = [clean(v) for v in df_plot.iloc[:, 1]]
                             bars = ax.bar(x_labels, vals, color='#4472C4', width=0.5)
                             for bar in bars:
                                 ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f'{int(bar.get_height())}', ha='center', va='bottom', fontweight='bold')
                         
                         ax.set_xlabel(df_plot.columns[0], fontsize=12, fontweight='bold')
-                        ax.set_ylabel('数量/金额', fontsize=12, fontweight='bold')
+                        ax.set_ylabel(df_plot.columns[1] if len(df_plot.columns)>1 else "数量", fontsize=12, fontweight='bold')
 
                     plt.title(current_title, fontsize=14, fontweight='bold', pad=20)
                     plt.tight_layout()
