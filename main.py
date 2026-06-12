@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
@@ -53,47 +53,56 @@ def set_font(run, size=12, bold=False):
     rPr.append(rFonts)
 
 def set_three_line_table(table):
-    """设置标准的黑色加粗三线表"""
-    thick_sz = '18' # 2.25pt
-    thin_sz = '8'   # 1pt
-    color_val = '000000'
+    """设置学术标准的黑色三线表 (顶线/底线加粗，标题下线细)"""
+    def set_cell_border(cell, **kwargs):
+        tcPr = cell._tc.get_or_add_tcPr()
+        for side, params in kwargs.items():
+            tag = f'w:{side}'
+            element = OxmlElement(tag)
+            element.set(qn('w:val'), params.get('val', 'single'))
+            element.set(qn('w:sz'), str(params.get('sz', '4')))
+            element.set(qn('w:color'), params.get('color', '000000'))
+            tcPr.append(element)
+
     for i, row in enumerate(table.rows):
         for cell in row.cells:
+            # 清除所有默认边框
             tcPr = cell._tc.get_or_add_tcPr()
             for b in ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']:
                 tag = f'w:{b}'; element = tcPr.find(qn(tag))
                 if element is not None: tcPr.remove(element)
+            
+            # 顶层加粗 (1.5pt = sz:12)
             if i == 0:
-                for pos, sz in [('top', thick_sz), ('bottom', thin_sz)]:
-                    border = OxmlElement(f'w:{pos}')
-                    border.set(qn('w:val'), 'single'); border.set(qn('w:sz'), sz); border.set(qn('w:color'), color_val)
-                    tcPr.append(border)
-            if i == len(table.rows) - 1:
-                btm = OxmlElement('w:bottom')
-                btm.set(qn('w:val'), 'single'); btm.set(qn('w:sz'), thick_sz); btm.set(qn('w:color'), color_val)
-                tcPr.append(btm)
+                set_cell_border(cell, top={'sz': 12, 'color': '000000'}, bottom={'sz': 6, 'color': '000000'})
+            # 底层加粗 (1.5pt = sz:12)
+            elif i == len(table.rows) - 1:
+                set_cell_border(cell, bottom={'sz': 12, 'color': '000000'})
 
 def draw_custom_pie(ax, values, labels):
-    """饼图优化：数值延伸、加粗、解决遮挡"""
-    colors = ['#4472C4', '#ED7D31', '#FFD966', '#E8307E', '#2EBB9F', '#2E3192']
+    """饼图：彻底解决数值重叠和方框问题"""
+    colors = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47']
     wedges, _ = ax.pie(values, colors=colors[:len(values)], startangle=90, counterclock=False, 
-                       wedgeprops={'edgecolor': 'white', 'linewidth': 1.5})
+                       wedgeprops={'edgecolor': 'white', 'linewidth': 1})
     
     total = sum(values)
     for i, p in enumerate(wedges):
         ang = (p.theta2 - p.theta1)/2. + p.theta1
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
-        horizontalalignment = {-1: "right", 1: "left"}[int(np.sign(x))]
+        
+        # 动态计算标签位置，防止靠得太近
+        va = "center"; ha = "left" if x > 0 else "right"
+        dist = 1.4  # 延伸长度
         connectionstyle = f"angle,angleA=0,angleB={ang}"
+        
         label_text = f"{labels[i]}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
-        ax.annotate(label_text, xy=(x, y), xytext=(1.35*np.sign(x), 1.35*y),
-                    horizontalalignment=horizontalalignment,
+        ax.annotate(label_text, xy=(x, y), xytext=(dist*np.sign(x), 1.3*y),
+                    horizontalalignment=ha, verticalalignment=va,
                     arrowprops=dict(arrowstyle="-", color="black", connectionstyle=connectionstyle),
-                    fontsize=11, fontweight='bold', va='center')
+                    fontsize=10, fontweight='bold')
 
 def add_page_number(doc):
-    """添加页码功能"""
     for sec in doc.sections:
         footer = sec.footer
         p = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
@@ -123,67 +132,80 @@ def process_smart(doc, text):
                 fig_num = int(fig_num_match.group()) if fig_num_match else 0
                 
                 if is_chart_mode:
-                    fig, ax = plt.subplots(figsize=(11, 7))
+                    fig, ax = plt.subplots(figsize=(10, 6))
                     def clean(v):
                         s = re.sub(r'[^\d.]', '', str(v))
                         return float(s) if s else 0.0
 
-                    # 逻辑 1：图 4, 5 饼图
+                    # 1. 饼图 (4, 5)
                     if fig_num in [4, 5]:
                         v_list = [clean(v) for v in df.iloc[:, 1]]
                         draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist())
-                        ax.set_xlim(-2.2, 2.2); ax.set_ylim(-1.8, 1.8)
+                        ax.set_xlim(-2.2, 2.2); ax.set_ylim(-1.5, 1.5)
 
-                    # 逻辑 2：图 9 双轴图 (立项数柱状 + 经费折线)
+                    # 2. 图 9 双轴图：优化重叠
                     elif fig_num == 9:
                         years = df.iloc[:, 0].astype(str).tolist()
                         counts = [clean(v) for v in df.iloc[:, 1]]
                         fundings = [clean(v) for v in df.iloc[:, 2]]
-                        
                         ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
-                        ax.set_xlabel('年份(publish_year)', fontsize=12, fontweight='bold')
-                        ax.set_ylabel('立项数(项)(count)', fontsize=12, fontweight='bold')
+                        ax.set_ylabel('立项数 (项)', fontsize=11, fontweight='bold')
                         for i, v in enumerate(counts):
-                            ax.text(i, v, f'{int(v)}', ha='center', va='bottom', fontweight='bold')
+                            ax.text(i, v + 2, f'{int(v)}', ha='center', va='bottom', fontweight='bold', color='#4472C4')
                         
                         ax2 = ax.twinx()
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
-                        ax2.set_ylabel('到账经费(万元)(received_funding)', fontsize=12, fontweight='bold')
+                        ax2.set_ylabel('经费 (万元)', fontsize=11, fontweight='bold')
                         for i, v in enumerate(fundings):
-                            ax2.text(i, v, f'{v:.1f}', ha='center', va='bottom', color='#ED7D31', fontweight='bold')
-                        fig.legend(loc='upper center', bbox_to_anchor=(0.5, 0.98), ncol=2)
+                            ax2.text(i, v + 50, f'{v:.1f}', ha='center', va='bottom', color='#ED7D31', fontweight='bold')
+                        
+                        ax.set_ylim(0, max(counts)*1.3)
+                        ax2.set_ylim(0, max(fundings)*1.3)
+                        fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2)
+                        plt.subplots_adjust(top=0.88, bottom=0.15)
 
-                    # 逻辑 3：其他柱状图（含图 12）
-                    else:
-                        cols = [c for c in df.columns if '合计' not in c and '总计' not in c]
-                        df_plot = df[cols][~df.iloc[:, 0].str.contains('合计|总计', na=False)]
+                    # 3. 图 10, 11：强制单系列柱状图
+                    elif fig_num in [10, 11]:
+                        # 只取年份和对应的总量（通常是第1或最后一列）
+                        x_labels = df.iloc[:, 0].astype(str).tolist()
+                        y_vals = [clean(v) for v in df.iloc[:, 1]]
+                        bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.5)
+                        for bar in bars:
+                            ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f'{int(bar.get_height())}', ha='center', va='bottom', fontweight='bold')
+                        ax.set_ylabel('数量', fontweight='bold')
+                        ax.set_xlabel('年份', fontweight='bold')
+
+                    # 4. 图 12：多系列分组柱状图 (A-F级)
+                    elif fig_num == 12:
+                        # 过滤非数据列，保留年份和各级列
+                        df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
                         x_labels = df_plot.iloc[:, 0].astype(str).tolist()
+                        categories = [c for c in df_plot.columns[1:] if '合计' not in c]
                         
-                        if len(df_plot.columns) > 2: # 多系列（图 12）
-                            x = np.arange(len(df_plot))
-                            width = 0.8 / (len(df_plot.columns)-1)
-                            for i, col in enumerate(df_plot.columns[1:]):
-                                vals = [clean(v) for v in df_plot[col]]
-                                rects = ax.bar(x + i*width, vals, width, label=col)
-                                for rect in rects:
-                                    h = rect.get_height()
-                                    if h > 0: ax.text(rect.get_x()+rect.get_width()/2, h, f'{int(h)}', ha='center', va='bottom', fontsize=9, fontweight='bold')
-                            ax.set_xticks(x + width*(len(df_plot.columns)-2)/2)
-                            ax.set_xticklabels(x_labels)
-                            ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=3)
-                        else: # 单系列
-                            vals = [clean(v) for v in df_plot.iloc[:, 1]]
-                            bars = ax.bar(x_labels, vals, color='#4472C4', width=0.5)
-                            for bar in bars:
-                                ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f'{int(bar.get_height())}', ha='center', va='bottom', fontweight='bold')
+                        x = np.arange(len(x_labels))
+                        width = 0.75 / len(categories)
+                        for i, cat in enumerate(categories):
+                            vals = [clean(v) for v in df_plot[cat]]
+                            rects = ax.bar(x + i*width, vals, width, label=cat)
+                            for rect in rects:
+                                h = rect.get_height()
+                                if h > 0: ax.text(rect.get_x()+rect.get_width()/2, h, f'{int(h)}', ha='center', va='bottom', fontsize=8)
                         
-                        ax.set_xlabel(df_plot.columns[0], fontsize=12, fontweight='bold')
-                        ax.set_ylabel(df_plot.columns[1] if len(df_plot.columns)>1 else "数量", fontsize=12, fontweight='bold')
+                        ax.set_xticks(x + width*(len(categories)-1)/2)
+                        ax.set_xticklabels(x_labels)
+                        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.12), ncol=len(categories))
+                        ax.set_ylabel('获奖数量', fontweight='bold')
+                        plt.subplots_adjust(bottom=0.2)
 
-                    plt.title(current_title, fontsize=14, fontweight='bold', pad=20)
-                    plt.tight_layout()
-                    buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=180); plt.close(); buf.seek(0)
-                    doc.add_picture(buf, width=Inches(5.8))
+                    # 其他通用图表
+                    else:
+                        vals = [clean(v) for v in df.iloc[:, 1]]
+                        ax.bar(df.iloc[:, 0].astype(str), vals, color='#4472C4', width=0.5)
+                        for i, v in enumerate(vals): ax.text(i, v, f'{int(v)}', ha='center', va='bottom')
+
+                    plt.title(current_title, fontsize=12, fontweight='bold', pad=15)
+                    buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(); buf.seek(0)
+                    doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 else:
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
@@ -193,7 +215,7 @@ def process_smart(doc, text):
                             cell = table.cell(i, j); cell.text = val
                             set_font(cell.paragraphs[0].runs[0] if cell.paragraphs[0].runs else cell.paragraphs[0].add_run(val), 10, i==0)
                     set_three_line_table(table)
-            except Exception as e: print(f"Plot Error: {e}")
+            except Exception as e: print(f"Error processing {current_title}: {e}")
         table_rows, is_chart_mode, current_title = [], False, ""
 
     for line in lines:
