@@ -54,17 +54,41 @@ def set_font(run, size=12, bold=False):
     rPr.append(rFonts)
 
 def set_table_border(table):
-    """为表格设置标准的黑色全边框"""
+    """为表格设置标准的黑色三线表边框"""
     tbl = table._tbl
     ptr = tbl.get_or_add_tblPr()
+    
+    # 清除旧的或默认的边框，重新构建 w:tblBorders
     borders = OxmlElement('w:tblBorders')
-    for tag in ['top', 'left', 'bottom', 'right', 'insideH', 'insideV']:
-        edge = OxmlElement(f'w:{tag}')
-        edge.set(qn('w:val'), 'single')
-        edge.set(qn('w:sz'), '4') # 0.5pt
-        edge.set(qn('w:color'), '000000')
-        borders.append(edge)
+    
+    # 表格顶部的粗线 (1.5pt = sz 12)
+    top = OxmlElement('w:top')
+    top.set(qn('w:val'), 'single')
+    top.set(qn('w:sz'), '12')
+    top.set(qn('w:color'), '000000')
+    borders.append(top)
+    
+    # 表格底部的粗线 (1.5pt = sz 12)
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '12')
+    bottom.set(qn('w:color'), '000000')
+    borders.append(bottom)
+    
     ptr.append(borders)
+    
+    # 为第一行（表头）的底部添加细线 (0.75pt = sz 6)
+    if len(table.rows) > 0:
+        for cell in table.rows[0].cells:
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            tcBorders = OxmlElement('w:tcBorders')
+            cell_bottom = OxmlElement('w:bottom')
+            cell_bottom.set(qn('w:val'), 'single')
+            cell_bottom.set(qn('w:sz'), '6')
+            cell_bottom.set(qn('w:color'), '000000')
+            tcBorders.append(cell_bottom)
+            tcPr.append(tcBorders)
 
 def draw_custom_pie(ax, values, labels, fig_num=0):
     """饼图：彻底解决数值重叠问题"""
@@ -84,16 +108,16 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
         x_text = dist * np.sign(x) if x != 0 else dist
         ha = "left" if x_text > 0 else "right"
         
-        # 针对图5，强制A和B一个向左，一个向右延伸
+        # 针对图5，强制A向右，B向左延伸
         if fig_num == 5:
             lbl_str = str(labels[i]).strip()
             if lbl_str == 'A':
-                x_text = -dist
-                ha = "right"
-                y_text = 1.6
-            elif lbl_str == 'B':
                 x_text = dist
                 ha = "left"
+                y_text = 1.6
+            elif lbl_str == 'B':
+                x_text = -dist
+                ha = "right"
                 y_text = 1.6
 
         connectionstyle = f"angle,angleA=0,angleB={ang}"
@@ -175,9 +199,11 @@ def process_smart(doc, text):
                         ax2 = ax.twinx()
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
                         
-                        # 添加图9折线图数值
+                        # 添加图9折线图数值：保留2位小数，2024年在点下方
                         for i, val in enumerate(fundings):
-                            ax2.text(years[i], val, f'{int(val)}', ha='center', va='bottom', fontsize=10, color='#C55A11', 
+                            year_str = str(years[i]).strip()
+                            va_val = 'top' if '2024' in year_str else 'bottom'
+                            ax2.text(years[i], val, f'{val:.2f}', ha='center', va=va_val, fontsize=10, color='#C55A11', 
                                      bbox=dict(facecolor='white', edgecolor='none', alpha=0.6, pad=0.5))
                             
                         fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2)
@@ -255,6 +281,7 @@ def process_smart(doc, text):
                                 
                                 cell.text = cell_text
                                 p = cell.paragraphs[0]
+                                # i == 0 代表这是第一行表头，自动传入 bold=True 使得加粗
                                 set_font(p.runs[0] if p.runs else p.add_run(cell_text), 10, i==0)
                     set_table_border(table)
             except Exception as e: print(f"Error processing {current_title}: {e}")
@@ -278,7 +305,7 @@ def process_smart(doc, text):
     flush_table()
 
 def add_toc(doc):
-    """插入目录域"""
+    """插入目录域并在无域缓存时添加展示文字"""
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run("目  录"); set_font(run, size=16, bold=True)
     
@@ -288,8 +315,14 @@ def add_toc(doc):
     instrText = OxmlElement('w:instrText'); instrText.set(qn('xml:space'), 'preserve')
     instrText.text = 'TOC \\o "1-3" \\h \\z \\u'
     fldChar2 = OxmlElement('w:fldChar'); fldChar2.set(qn('w:fldCharType'), 'separate')
+    
+    # 增加默认提示字，解决直接生成时一片空白的问题
+    hint_text = OxmlElement('w:t')
+    hint_text.text = "（请在此处右键单击，选择“更新域” -> “更新整个目录” 以生成目录内容）"
+    
     fldChar3 = OxmlElement('w:fldChar'); fldChar3.set(qn('w:fldCharType'), 'end')
-    run_toc._r.extend([fldChar1, instrText, fldChar2, fldChar3])
+    
+    run_toc._r.extend([fldChar1, instrText, fldChar2, hint_text, fldChar3])
     doc.add_page_break()
 
 @app.post("/generate_report_word")
