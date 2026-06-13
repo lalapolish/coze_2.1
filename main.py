@@ -66,7 +66,7 @@ def set_table_border(table):
         borders.append(edge)
     ptr.append(borders)
 
-def draw_custom_pie(ax, values, labels):
+def draw_custom_pie(ax, values, labels, fig_num=0):
     """饼图：彻底解决数值重叠问题"""
     colors = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47']
     wedges, _ = ax.pie(values, colors=colors[:len(values)], startangle=90, counterclock=False, 
@@ -77,14 +77,29 @@ def draw_custom_pie(ax, values, labels):
         ang = (p.theta2 - p.theta1)/2. + p.theta1
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
-        va = "center"; ha = "left" if x > 0 else "right"
         dist = 1.7
+        
         y_text = 1.35 * y
         if abs(y) < 0.3: y_text = 1.5 * y
+        x_text = dist * np.sign(x) if x != 0 else dist
+        ha = "left" if x_text > 0 else "right"
+        
+        # 针对图5，强制A和B一个向左，一个向右延伸
+        if fig_num == 5:
+            lbl_str = str(labels[i]).strip()
+            if lbl_str == 'A':
+                x_text = -dist
+                ha = "right"
+                y_text = 1.6
+            elif lbl_str == 'B':
+                x_text = dist
+                ha = "left"
+                y_text = 1.6
+
         connectionstyle = f"angle,angleA=0,angleB={ang}"
         label_text = f"{labels[i]}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
-        ax.annotate(label_text, xy=(x, y), xytext=(dist*np.sign(x), y_text),
-                    horizontalalignment=ha, verticalalignment=va,
+        ax.annotate(label_text, xy=(x, y), xytext=(x_text, y_text),
+                    horizontalalignment=ha, verticalalignment="center",
                     arrowprops=dict(arrowstyle="-", color="black", connectionstyle=connectionstyle),
                     fontsize=10, fontweight='bold')
 
@@ -125,7 +140,7 @@ def process_smart(doc, text):
                     # 1. 饼图 (4, 5)
                     if fig_num in [4, 5]:
                         v_list = [clean(v) for v in df.iloc[:, 1]]
-                        draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist())
+                        draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist(), fig_num)
                         ax.set_xlim(-2.5, 2.5); ax.set_ylim(-1.6, 1.6)
 
                     # 2. 多系列分组柱状图 (2, 12)
@@ -149,9 +164,22 @@ def process_smart(doc, text):
                     elif fig_num == 9:
                         years = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
                         counts = [clean(v) for v in df.iloc[:, 1]]; fundings = [clean(v) for v in df.iloc[:, 2]]
-                        ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
+                        bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
+                        
+                        # 添加图9柱状图数值
+                        for bar in bars:
+                            h = bar.get_height()
+                            if h > 0:
+                                ax.text(bar.get_x() + bar.get_width()/2, h, f'{int(h)}', ha='center', va='bottom', fontsize=10)
+                                
                         ax2 = ax.twinx()
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
+                        
+                        # 添加图9折线图数值
+                        for i, val in enumerate(fundings):
+                            ax2.text(years[i], val, f'{int(val)}', ha='center', va='bottom', fontsize=10, color='#C55A11', 
+                                     bbox=dict(facecolor='white', edgecolor='none', alpha=0.6, pad=0.5))
+                            
                         fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2)
                         plt.subplots_adjust(top=0.88, bottom=0.15)
 
@@ -177,8 +205,26 @@ def process_smart(doc, text):
                             x_labels.append(s if s else "0")
                         
                         vals = [clean(v) for v in df.iloc[:, 1]]
-                        ax.bar(x_labels, vals, color='#4472C4', width=0.5)
+                        bars = ax.bar(x_labels, vals, color='#4472C4', width=0.5)
                         for i, v in enumerate(vals): ax.text(i, v, f'{int(v)}', ha='center', va='bottom')
+
+                    # ================= 新增横纵坐标标注 =================
+                    xy_labels = {
+                        1: ('发表年份', '论文数量'),
+                        2: ('年份', '论文数量'),
+                        3: ('年份', '立项数量'),
+                        6: ('经费区间（万元）', '项目数量'),
+                        7: ('立项年份', '项目数量'),
+                        8: ('经费区间', '项目数量'),
+                        9: ('年份', '项目数量'),
+                        10: ('年份', '著作出版数量'),
+                        11: ('年份', '获奖数量'),
+                        12: ('年份', '获奖数量')
+                    }
+                    if fig_num in xy_labels:
+                        ax.set_xlabel(xy_labels[fig_num][0], fontweight='bold')
+                        ax.set_ylabel(xy_labels[fig_num][1], fontweight='bold')
+                    # ====================================================
 
                     buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(); buf.seek(0)
                     doc.add_picture(buf, width=Inches(5.6))
