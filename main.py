@@ -33,6 +33,7 @@ class ReportInput(BaseModel):
     ch6_text: Optional[str] = ""
     ch7_text: Optional[str] = ""
     ch8_text: Optional[str] = "" 
+    appendix: Optional[str] = "" # 新增附录变量
 
 # ================= 解决图片方框：强制加载本地 SimHei.ttf =================
 font_path = os.path.join(os.getcwd(), 'SimHei.ttf')
@@ -170,11 +171,10 @@ def process_smart(doc, text):
 
                     # 5. 普通柱状图 (6, 8 等)
                     else:
-                        # 特殊逻辑：移除坐标轴中的“万元”，但保留区间数值
                         x_labels = []
                         for x in df.iloc[:, 0]:
                             s = str(x).replace('万元', '').strip()
-                            x_labels.append(s if s else "0") # 防止全删掉变成空字符串
+                            x_labels.append(s if s else "0")
                         
                         vals = [clean(v) for v in df.iloc[:, 1]]
                         ax.bar(x_labels, vals, color='#4472C4', width=0.5)
@@ -184,7 +184,7 @@ def process_smart(doc, text):
                     doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 else:
-                    # 表格逻辑：处理全边框和表 10 合并
+                    # 表格逻辑
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     table_num_match = re.search(r'\d+', current_title)
@@ -195,9 +195,7 @@ def process_smart(doc, text):
                         is_special = ("B级" in row_str or "C级" in row_str) and "发文数量" in row_str
                         
                         if is_special and table_num == 10:
-                            # 合并表 10 的特殊行
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_data)-1))
-                            # 先清除可能存在的默认文字
                             for p in merged_cell.paragraphs: p.text = ""
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -206,7 +204,6 @@ def process_smart(doc, text):
                             for j, val in enumerate(row_data):
                                 cell = table.cell(i, j)
                                 cell_text = val
-                                # 表 6 特殊处理：表头除了总计，不加单位
                                 if table_num == 6 and i == 0 and "总计" not in cell_text:
                                     cell_text = cell_text.replace("（万元）", "").replace("(万元)", "")
                                 
@@ -235,7 +232,7 @@ def process_smart(doc, text):
     flush_table()
 
 def add_toc(doc):
-    """插入目录域。注意：Word 需要手动点击“更新域”来显示内容"""
+    """插入目录域"""
     p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run("目  录"); set_font(run, size=16, bold=True)
     
@@ -253,7 +250,6 @@ def add_toc(doc):
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
-        # 强制开启自动更新域（为了目录）
         element = doc.settings.element
         update_fields = OxmlElement('w:updateFields'); update_fields.set(qn('w:val'), 'true'); element.append(update_fields)
         
@@ -266,9 +262,21 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         add_toc(doc)
         add_page_number(doc)
         
+        # 处理正文 1-8 章
         for i in range(1, 9): 
             txt = getattr(input_data, f"ch{i}_text", "")
             if txt and txt.strip(): process_smart(doc, txt)
+        
+        # 处理附录部分
+        if input_data.appendix and input_data.appendix.strip():
+            doc.add_page_break() # 附录另起一页
+            p_app = doc.add_paragraph()
+            p_app.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            run_app = p_app.add_run("附录")
+            # 设置宋体、3号 (16pt)、加粗
+            set_font(run_app, size=16, bold=True)
+            # 使用 process_smart 解析附录中的 Markdown 表格和文字
+            process_smart(doc, input_data.appendix)
         
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
         full_path = os.path.join("static", fname)
