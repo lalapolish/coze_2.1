@@ -349,12 +349,7 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         # 处理附录部分
         if input_data.appendix and input_data.appendix.strip():
             doc.add_page_break() # 附录另起一页
-            p_app = doc.add_paragraph()
-            p_app.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run_app = p_app.add_run("附录")
-            # 设置宋体、3号 (16pt)、加粗
-            set_font(run_app, size=16, bold=True)
-            # 使用 process_smart 解析附录中的 Markdown 表格和文字
+            # 使用 process_smart 解析附录中的 Markdown（含 ## 附录 标题、表格和文字）
             process_smart(doc, input_data.appendix)
         
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
