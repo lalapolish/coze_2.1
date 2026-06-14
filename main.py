@@ -139,7 +139,7 @@ def add_page_number(doc):
 
 def process_smart(doc, text):
     text = text.replace('\\%', '%').replace('$$', '').replace('\r', '')
-    text = re.sub(r'\([\d\.\+\-\*/\s]+\s*[≈=]\s*[\d\.\%]+\)', '', text)
+    text = re.sub(r'$[\d\.\+\-\*/\s]+\s*[≈=]\s*[\d\.\%]+$', '', text)
     lines = text.split('\n')
     table_rows, current_title, is_chart_mode = [], "", False
 
@@ -169,7 +169,7 @@ def process_smart(doc, text):
                     # 2. 多系列分组柱状图 (2, 12)
                     elif fig_num in [2, 12]:
                         df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
-                        x_labels = [re.sub(r'（.*?）|\(.*?\)|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
+                        x_labels = [re.sub(r'（.*?）|$.*?$|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
                         categories = [c for c in df_plot.columns[1:] if '合计' not in c]
                         x = np.arange(len(x_labels))
                         width = 0.75 / len(categories)
@@ -185,7 +185,7 @@ def process_smart(doc, text):
 
                     # 3. 双轴图 (9)
                     elif fig_num == 9:
-                        years = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
+                        years = [re.sub(r'（.*?）|$.*?$', '', str(x)) for x in df.iloc[:, 0]]
                         counts = [clean(v) for v in df.iloc[:, 1]]; fundings = [clean(v) for v in df.iloc[:, 2]]
                         bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
                         
@@ -216,7 +216,7 @@ def process_smart(doc, text):
                             x_labels = year_headers
                             y_vals = [clean(df.iloc[0, i]) for i in range(1, len(df.columns))]
                         else:
-                            x_labels = [re.sub(r'（.*?）|\(.*?\)|万元', '', str(x)) for x in df.iloc[:, 0]]
+                            x_labels = [re.sub(r'（.*?）|$.*?$|万元', '', str(x)) for x in df.iloc[:, 0]]
                             y_vals = [clean(v) for v in df.iloc[:, 1]]
                         bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.5)
                         for bar in bars:
@@ -248,138 +248,4 @@ def process_smart(doc, text):
                     }
                     if fig_num in xy_labels:
                         ax.set_xlabel(xy_labels[fig_num][0], fontweight='bold')
-                        ax.set_ylabel(xy_labels[fig_num][1], fontweight='bold')
-                    # ====================================================
-
-                    buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(); buf.seek(0)
-                    doc.add_picture(buf, width=Inches(5.6))
-                    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                else:
-                    # 表格逻辑
-                    table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
-                    table.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    table_num_match = re.search(r'\d+', current_title)
-                    table_num = int(table_num_match.group()) if table_num_match else 0
-
-                    for i, row_data in enumerate(raw_data):
-                        # 需求：所有表格高度设置 0.71cm
-                        table.rows[i].height = Cm(0.71)
-                        row_str = "".join(row_data)
-                        is_special = ("B级" in row_str or "C级" in row_str) and "发文数量" in row_str
-                        
-                        if is_special and table_num == 10:
-                            merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_data)-1))
-                            for p in merged_cell.paragraphs: p.text = ""
-                            p = merged_cell.paragraphs[0]
-                            # 需求：表格内容水平居中
-                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER # 需求：垂直居中
-                            set_font(p.add_run(row_str.replace('*', '').strip()), 11, True)
-                        else:
-                            for j, val in enumerate(row_data):
-                                cell = table.cell(i, j)
-                                cell_text = val
-                                if table_num == 6 and i == 0 and "总计" not in cell_text:
-                                    cell_text = cell_text.replace("（万元）", "").replace("(万元)", "")
-                                
-                                cell.text = cell_text
-                                # 需求：表头是“2020”这种的表格宽度限制在 1.3 厘米
-                                header_content = str(raw_data[0][j]).strip()
-                                if re.match(r'^20\d{2}$', header_content):
-                                    cell.width = Cm(1.3)
-                                
-                                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER # 需求：垂直居中
-                                p = cell.paragraphs[0]
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER # 需求：水平居中
-                                
-                                # 背景颜色控制：表头深蓝(4472C4)，偶数行淡蓝(D9E1F2)，奇数行白色
-                                if i == 0:
-                                    set_cell_shading(cell, "4472C4") # 表头深蓝
-                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, True, "FFFFFF")
-                                elif i % 2 == 0:
-                                    set_cell_shading(cell, "D9E1F2") # 偶数行淡蓝
-                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
-                                else:
-                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
-                    set_table_border(table)
-            except Exception as e: print(f"Error processing {current_title}: {e}")
-        table_rows, is_chart_mode, current_title = [], False, ""
-
-    for line in lines:
-        l = line.strip()
-        if not l: continue
-        if l.startswith('#'):
-            flush_table(); p = doc.add_heading('', level=min(l.count('#'), 3))
-            # 需求：附录中的标题居中对齐
-            if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(l.replace('#', '').strip()); set_font(run, 14, True)
-        # ================= 修改正则以识别附表/附图及带连字符编号 =================
-        elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
-            flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
-            p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(current_title); set_font(run, 11, True)
-        # =========================================================================
-        elif l.startswith('|'): table_rows.append(l)
-        else:
-            if table_rows: flush_table()
-            p = doc.add_paragraph(); p.paragraph_format.first_line_indent = Pt(24)
-            run = p.add_run(l.replace('**', '')); set_font(run, 12)
-    flush_table()
-
-def add_toc(doc):
-    """插入目录域并在无域缓存时添加展示文字"""
-    p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("目  录"); set_font(run, size=16, bold=True)
-    
-    p_toc = doc.add_paragraph()
-    run_toc = p_toc.add_run()
-    fldChar1 = OxmlElement('w:fldChar'); fldChar1.set(qn('w:fldCharType'), 'begin')
-    instrText = OxmlElement('w:instrText'); instrText.set(qn('xml:space'), 'preserve')
-    instrText.text = 'TOC \\o "1-3" \\h \\z \\u'
-    fldChar2 = OxmlElement('w:fldChar'); fldChar2.set(qn('w:fldCharType'), 'separate')
-    
-    # 增加默认提示字，解决直接生成时一片空白的问题
-    hint_text = OxmlElement('w:t')
-    hint_text.text = "（请在此处右键单击，选择“更新域” -> “更新整个目录” 以生成目录内容）"
-    
-    fldChar3 = OxmlElement('w:fldChar'); fldChar3.set(qn('w:fldCharType'), 'end')
-    
-    run_toc._r.extend([fldChar1, instrText, fldChar2, hint_text, fldChar3])
-    doc.add_page_break()
-
-@app.post("/generate_report_word")
-async def generate_report_word(input_data: ReportInput, request: Request):
-    try:
-        doc = Document()
-        element = doc.settings.element
-        update_fields = OxmlElement('w:updateFields'); update_fields.set(qn('w:val'), 'true'); element.append(update_fields)
-        
-        # 封面
-        for _ in range(4): doc.add_paragraph()
-        p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = p.add_run("山东师范大学人文社会科学科研成果发展态势分析报告\n（2020-2024）")
-        set_font(run, size=22, bold=True); doc.add_page_break()
-        
-        add_toc(doc)
-        add_page_number(doc)
-        
-        # 处理正文 1-8 章
-        for i in range(1, 9): 
-            txt = getattr(input_data, f"ch{i}_text", "")
-            if txt and txt.strip(): process_smart(doc, txt)
-        
-        # 处理附录部分
-        if input_data.appendix and input_data.appendix.strip():
-            doc.add_page_break() # 附录另起一页
-            # 使用 process_smart 解析附录中的 Markdown（含 ## 附录 标题、表格和文字）
-            process_smart(doc, input_data.appendix)
-        
-        fname = f"report_{uuid.uuid4().hex[:8]}.docx"
-        full_path = os.path.join("static", fname)
-        doc.save(full_path)
-        return {"file": f"{str(request.base_url).rstrip('/')}/static/{fname}", "status": "success"}
-    except Exception as e: return {"file": "", "status": "error", "message": str(e)}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8080)
+                        ax
