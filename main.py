@@ -44,51 +44,49 @@ else:
     plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
 plt.rcParams['axes.unicode_minus'] = False
 
-def set_font(run, size=12, bold=False):
+def set_font(run, size=12, bold=False, color=None):
+    """设置字体、大小、加粗及颜色"""
     run.font.size = Pt(size)
     run.font.name = '宋体'
     run.bold = bold
+    if color:
+        run.font.color.rgb = RGBColor.from_string(color)
     rPr = run._element.get_or_add_rPr()
     rFonts = OxmlElement('w:rFonts')
     rFonts.set(qn('w:eastAsia'), '宋体')
     rPr.append(rFonts)
 
+def set_cell_shading(cell, color):
+    """设置单元格背景颜色"""
+    tcPr = cell._tc.get_or_add_tcPr()
+    shd = OxmlElement('w:shd')
+    shd.set(qn('w:val'), 'clear')
+    shd.set(qn('w:color'), 'auto')
+    shd.set(qn('w:fill'), color)
+    tcPr.append(shd)
+
 def set_table_border(table):
-    """为表格设置标准的黑色三线表边框"""
+    """为表格设置蓝色的外边框线"""
     tbl = table._tbl
     ptr = tbl.get_or_add_tblPr()
-    
-    # 清除旧的或默认的边框，重新构建 w:tblBorders
     borders = OxmlElement('w:tblBorders')
     
-    # 表格顶部的粗线 (1.5pt = sz 12)
-    top = OxmlElement('w:top')
-    top.set(qn('w:val'), 'single')
-    top.set(qn('w:sz'), '12')
-    top.set(qn('w:color'), '000000')
-    borders.append(top)
+    # 蓝色外边框 (1.5pt = sz 12, 颜色 4472C4)
+    for border_name in ['top', 'bottom', 'left', 'right']:
+        edge = OxmlElement(f'w:{border_name}')
+        edge.set(qn('w:val'), 'single')
+        edge.set(qn('w:sz'), '12')
+        edge.set(qn('w:color'), '4472C4')
+        borders.append(edge)
     
-    # 表格底部的粗线 (1.5pt = sz 12)
-    bottom = OxmlElement('w:bottom')
-    bottom.set(qn('w:val'), 'single')
-    bottom.set(qn('w:sz'), '12')
-    bottom.set(qn('w:color'), '000000')
-    borders.append(bottom)
+    # 内部横线 (0.5pt, 蓝色)
+    inside_h = OxmlElement('w:insideH')
+    inside_h.set(qn('w:val'), 'single')
+    inside_h.set(qn('w:sz'), '4')
+    inside_h.set(qn('w:color'), '4472C4')
+    borders.append(inside_h)
     
     ptr.append(borders)
-    
-    # 为第一行（表头）的底部添加细线 (0.75pt = sz 6)
-    if len(table.rows) > 0:
-        for cell in table.rows[0].cells:
-            tc = cell._tc
-            tcPr = tc.get_or_add_tcPr()
-            tcBorders = OxmlElement('w:tcBorders')
-            cell_bottom = OxmlElement('w:bottom')
-            cell_bottom.set(qn('w:val'), 'single')
-            cell_bottom.set(qn('w:sz'), '6')
-            cell_bottom.set(qn('w:color'), '000000')
-            tcBorders.append(cell_bottom)
-            tcPr.append(tcBorders)
 
 def draw_custom_pie(ax, values, labels, fig_num=0):
     """饼图：彻底解决数值重叠问题"""
@@ -271,7 +269,7 @@ def process_smart(doc, text):
                             for p in merged_cell.paragraphs: p.text = ""
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            set_font(p.add_run(row_str.replace('*', '').strip()), 10, True)
+                            set_font(p.add_run(row_str.replace('*', '').strip()), 11, True)
                         else:
                             for j, val in enumerate(row_data):
                                 cell = table.cell(i, j)
@@ -281,8 +279,17 @@ def process_smart(doc, text):
                                 
                                 cell.text = cell_text
                                 p = cell.paragraphs[0]
-                                # i == 0 代表这是第一行表头，自动传入 bold=True 使得加粗
-                                set_font(p.runs[0] if p.runs else p.add_run(cell_text), 10, i==0)
+                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                
+                                # 背景颜色控制：表头深蓝(4472C4)，偶数行淡蓝(D9E1F2)，奇数行白色
+                                if i == 0:
+                                    set_cell_shading(cell, "4472C4") # 表头深蓝
+                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, True, "FFFFFF")
+                                elif i % 2 == 0:
+                                    set_cell_shading(cell, "D9E1F2") # 偶数行淡蓝
+                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
+                                else:
+                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
                     set_table_border(table)
             except Exception as e: print(f"Error processing {current_title}: {e}")
         table_rows, is_chart_mode, current_title = [], False, ""
@@ -292,6 +299,8 @@ def process_smart(doc, text):
         if not l: continue
         if l.startswith('#'):
             flush_table(); p = doc.add_heading('', level=min(l.count('#'), 3))
+            # 需求：附录中的标题居中对齐
+            if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(l.replace('#', '').strip()); set_font(run, 14, True)
         elif re.match(r'(\*\*?)?[图表]\s?\d+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
