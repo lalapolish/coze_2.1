@@ -313,10 +313,12 @@ def process_smart(doc, text):
             # 需求：附录中的标题居中对齐
             if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(l.replace('#', '').strip()); set_font(run, 14, True)
-        elif re.match(r'(\*\*?)?[图表]\s?\d+[:：\s]', l):
+        # ================= 修改正则以识别附表/附图及带连字符编号 =================
+        elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
             p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(current_title); set_font(run, 11, True)
+        # =========================================================================
         elif l.startswith('|'): table_rows.append(l)
         else:
             if table_rows: flush_table()
