@@ -13,10 +13,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from docx import Document
-from docx.shared import Pt, Inches, RGBColor
+from docx.shared import Pt, Inches, RGBColor, Cm
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_ALIGN_VERTICAL
 
 app = FastAPI(openapi_version="3.0.0")
 
@@ -261,6 +262,8 @@ def process_smart(doc, text):
                     table_num = int(table_num_match.group()) if table_num_match else 0
 
                     for i, row_data in enumerate(raw_data):
+                        # 需求：所有表格高度设置 0.71cm
+                        table.rows[i].height = Cm(0.71)
                         row_str = "".join(row_data)
                         is_special = ("B级" in row_str or "C级" in row_str) and "发文数量" in row_str
                         
@@ -268,7 +271,9 @@ def process_smart(doc, text):
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_data)-1))
                             for p in merged_cell.paragraphs: p.text = ""
                             p = merged_cell.paragraphs[0]
+                            # 需求：表格内容水平居中
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER # 需求：垂直居中
                             set_font(p.add_run(row_str.replace('*', '').strip()), 11, True)
                         else:
                             for j, val in enumerate(row_data):
@@ -278,8 +283,14 @@ def process_smart(doc, text):
                                     cell_text = cell_text.replace("（万元）", "").replace("(万元)", "")
                                 
                                 cell.text = cell_text
+                                # 需求：表头是“2020”这种的表格宽度限制在 1.3 厘米
+                                header_content = str(raw_data[0][j]).strip()
+                                if re.match(r'^20\d{2}$', header_content):
+                                    cell.width = Cm(1.3)
+                                
+                                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER # 需求：垂直居中
                                 p = cell.paragraphs[0]
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER # 需求：水平居中
                                 
                                 # 背景颜色控制：表头深蓝(4472C4)，偶数行淡蓝(D9E1F2)，奇数行白色
                                 if i == 0:
