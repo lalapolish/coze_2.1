@@ -262,7 +262,6 @@ def process_smart(doc, text):
                     table_num = int(table_num_match.group()) if table_num_match else 0
 
                     for i, row_data in enumerate(raw_data):
-                        # 需求：所有表格高度设置 0.71cm
                         table.rows[i].height = Cm(0.71)
                         row_str = "".join(row_data)
                         is_special = ("B级" in row_str or "C级" in row_str) and "发文数量" in row_str
@@ -271,9 +270,8 @@ def process_smart(doc, text):
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_data)-1))
                             for p in merged_cell.paragraphs: p.text = ""
                             p = merged_cell.paragraphs[0]
-                            # 需求：表格内容水平居中
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                            merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER # 需求：垂直居中
+                            merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER 
                             set_font(p.add_run(row_str.replace('*', '').strip()), 11, True)
                         else:
                             for j, val in enumerate(row_data):
@@ -283,15 +281,13 @@ def process_smart(doc, text):
                                     cell_text = cell_text.replace("（万元）", "").replace("(万元)", "")
                                 
                                 cell.text = cell_text
-                                
-                                # 【已删除】此处原来包含 re.match(r'^20\d{2}$', header_content) 的宽度限制代码
-                                
-                                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER # 需求：垂直居中
+                                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER 
                                 p = cell.paragraphs[0]
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER # 需求：水平居中
+                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER 
                                 
-                                # 背景颜色控制：表头深蓝(4472C4)，偶数行淡蓝(D9E1F2)，奇数行白色
-                                if i == 0:
+                                # 背景颜色控制：
+                                # 如果是表 9，则前两行（第 0, 1 行）均为表头深蓝色
+                                if i == 0 or (table_num == 9 and i == 1):
                                     set_cell_shading(cell, "4472C4") # 表头深蓝
                                     set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, True, "FFFFFF")
                                 elif i % 2 == 0:
@@ -299,6 +295,26 @@ def process_smart(doc, text):
                                     set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
                                 else:
                                     set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
+                    
+                    # ================= 表 9 双层表头物理合并逻辑 =================
+                    if table_num == 9 and len(raw_data) >= 2:
+                        # 1. 横向合并第一行的“认定等级” (列索引 2 到 7)
+                        table.cell(0, 2).merge(table.cell(0, 7))
+                        # 2. 纵向合并“序号” (第 0 列)
+                        table.cell(0, 0).merge(table.cell(1, 0))
+                        # 3. 纵向合并“姓名” (第 1 列)
+                        table.cell(0, 1).merge(table.cell(1, 1))
+                        # 4. 纵向合并“所属单位” (第 8 列)
+                        table.cell(0, 8).merge(table.cell(1, 8))
+                        
+                        # 重新校准合并后的文字对齐（docx合并后有时会丢失对齐）
+                        for m_coords in [(0,0), (0,1), (0,2), (0,8)]:
+                            m_cell = table.cell(m_coords[0], m_coords[1])
+                            m_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+                            if m_cell.paragraphs:
+                                m_cell.paragraphs[0].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    # ============================================================
+                    
                     set_table_border(table)
             except Exception as e: print(f"Error processing {current_title}: {e}")
         table_rows, is_chart_mode, current_title = [], False, ""
@@ -308,15 +324,12 @@ def process_smart(doc, text):
         if not l: continue
         if l.startswith('#'):
             flush_table(); p = doc.add_heading('', level=min(l.count('#'), 3))
-            # 需求：附录中的标题居中对齐
             if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(l.replace('#', '').strip()); set_font(run, 14, True)
-        # ================= 修改正则以识别附表/附图及带连字符编号 =================
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
             p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(current_title); set_font(run, 11, True)
-        # =========================================================================
         elif l.startswith('|'): table_rows.append(l)
         else:
             if table_rows: flush_table()
@@ -336,7 +349,6 @@ def add_toc(doc):
     instrText.text = 'TOC \\o "1-3" \\h \\z \\u'
     fldChar2 = OxmlElement('w:fldChar'); fldChar2.set(qn('w:fldCharType'), 'separate')
     
-    # 增加默认提示字，解决直接生成时一片空白的问题
     hint_text = OxmlElement('w:t')
     hint_text.text = "（请在此处右键单击，选择“更新域” -> “更新整个目录” 以生成目录内容）"
     
@@ -368,8 +380,7 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         
         # 处理附录部分
         if input_data.appendix and input_data.appendix.strip():
-            doc.add_page_break() # 附录另起一页
-            # 使用 process_smart 解析附录中的 Markdown（含 ## 附录 标题、表格和文字）
+            doc.add_page_break() 
             process_smart(doc, input_data.appendix)
         
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
