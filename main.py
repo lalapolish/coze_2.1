@@ -287,9 +287,19 @@ def process_smart(doc, text):
         l = line.strip()
         if not l: continue
         if l.startswith('#'):
-            flush_table(); p = doc.add_heading('', level=min(l.count('#'), 3))
-            if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(l.replace('#', '').strip()); set_font(run, 14, True)
+            flush_table()
+            hash_count = l.count('#')
+            # 只有 1-3 级标题进入目录，4级及以上作为加粗正文处理
+            if hash_count <= 3:
+                p = doc.add_heading('', level=hash_count)
+                if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = p.add_run(l.replace('#', '').strip())
+                set_font(run, 14, True)
+            else:
+                p = doc.add_paragraph()
+                # 4级标题不缩进，模拟标题外观但本质是正文，不会进目录
+                run = p.add_run(l.replace('#', '').strip())
+                set_font(run, 12, True)
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
             p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
