@@ -138,8 +138,7 @@ def add_page_number(doc):
         run._r.extend([fldChar1, instrText, fldChar2])
 
 def process_smart(doc, text):
-    # 修改：不再删除 $$，保留数学格式，处理 \n 
-    text = text.replace('\\%', '%').replace('\r', '')
+    text = text.replace('\\%', '%').replace('$$', '').replace('\r', '')
     text = re.sub(r'\([\d\.\+\-\*/\s]+\s*[≈=]\s*[\d\.\%]+\)', '', text)
     lines = text.split('\n')
     table_rows, current_title, is_chart_mode = [], "", False
@@ -167,10 +166,9 @@ def process_smart(doc, text):
                         draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist(), fig_num)
                         ax.set_xlim(-2.5, 2.5); ax.set_ylim(-1.6, 1.6)
 
-                    # 2. 多系列分组柱状图 (2, 12) - 修改颜色为：淡红、橙、黄、绿、青、蓝
+                    # 2. 多系列分组柱状图 (2, 12) - 修改颜色为淡红、橙、黄、绿、青、蓝
                     elif fig_num in [2, 12]:
-                        # 定义要求的 6 种颜色
-                        group_colors = ['#F4CCCC', '#F9CB9C', '#FFE599', '#B6D7A8', '#A2C4C9', '#A4C2F4']
+                        custom_bar_colors = ['#F4CCCC', '#F9CB9C', '#FFE599', '#B6D7A8', '#A2C4C9', '#A4C2F4']
                         df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
                         x_labels = [re.sub(r'（.*?）|\(.*?\)|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
                         categories = [c for c in df_plot.columns[1:] if '合计' not in c]
@@ -178,7 +176,7 @@ def process_smart(doc, text):
                         width = 0.8 / (len(categories) + 1)
                         for i, cat in enumerate(categories):
                             vals = [clean(v) for v in df_plot[cat]]
-                            ax.bar(x + i*width, vals, width, label=cat, color=group_colors[i % len(group_colors)])
+                            ax.bar(x + i*width, vals, width, label=cat, color=custom_bar_colors[i % len(custom_bar_colors)])
                         ax.set_xticks(x + width*(len(categories)-1)/2); ax.set_xticklabels(x_labels)
                         ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(categories))
                         plt.subplots_adjust(bottom=0.2)
@@ -241,20 +239,22 @@ def process_smart(doc, text):
 
                     for i, row_data in enumerate(raw_data):
                         table.rows[i].height = Cm(0.71)
-                        # 修改：使用更健壮的去空格匹配逻辑
-                        row_content_combined = "".join(row_data).replace(" ", "").replace("$", "")
-                        is_special_row = ("B级" in row_content_combined or "C级" in row_content_combined) and table_num == 10
+                        row_str = "".join(row_data)
                         
-                        if is_special_row:
-                            # 合并整行
+                        # (2) 表 10 特殊行逻辑：B级和C级标题全行合并
+                        is_special = ("B级" in row_str or "C级" in row_str) and table_num == 10
+                        
+                        if is_special:
+                            # 彻底修正合并单元格逻辑
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_data)-1))
-                            for p in merged_cell.paragraphs: p.clear() # 清空原有内容
+                            # 清除原有段落并重新添加以确保居中
+                            for p in merged_cell.paragraphs:
+                                p.clear()
                             p = merged_cell.paragraphs[0]
-                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER # 居中
+                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                            # 填入文字并加粗显示
-                            clean_text = "".join(row_data).replace('*', '').strip()
-                            set_font(p.add_run(clean_text), 11, True)
+                            # 填入文字并加粗
+                            set_font(p.add_run(row_str.replace('*', '').strip()), 11, True)
                         else:
                             for j, val in enumerate(row_data):
                                 cell = table.cell(i, j)
@@ -294,29 +294,29 @@ def process_smart(doc, text):
         if l.startswith('#'):
             flush_table()
             hash_count = l.count('#')
-            # 只有 1-3 级标题进入目录
+            # 只有 1-3 级标题进入目录，4级及以上作为加粗正文处理
             if hash_count <= 3:
                 p = doc.add_heading('', level=hash_count)
-                p.paragraph_format.line_spacing = 1.5 # 修改：设置 1.5 倍行距
+                p.paragraph_format.line_spacing = 1.5 # 设置1.5倍行距
                 if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 14, True)
             else:
                 p = doc.add_paragraph()
-                p.paragraph_format.line_spacing = 1.5 # 修改：设置 1.5 倍行距
+                p.paragraph_format.line_spacing = 1.5 # 设置1.5倍行距
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 12, True)
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
             p = doc.add_paragraph()
-            p.paragraph_format.line_spacing = 1.5 # 修改：设置 1.5 倍行距
+            p.paragraph_format.line_spacing = 1.5
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             run = p.add_run(current_title); set_font(run, 11, True)
         elif l.startswith('|'): table_rows.append(l)
         else:
             if table_rows: flush_table()
             p = doc.add_paragraph()
-            p.paragraph_format.line_spacing = 1.5 # 修改：设置 1.5 倍行距
+            p.paragraph_format.line_spacing = 1.5 # 设置1.5倍行距
             p.paragraph_format.first_line_indent = Pt(24)
             run = p.add_run(l.replace('**', '')); set_font(run, 12)
     flush_table()
