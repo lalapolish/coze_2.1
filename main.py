@@ -273,6 +273,22 @@ def process_smart(doc, text):
                                     new_table_data.append(left + right)
                         raw_data = new_table_data
 
+                    # (C) 表 13 和表 14 的特殊处理：序号 13 及之后在右侧显示
+                    if current_num in [13, 14]:
+                        max_rows = 13 # 1行表头 + 12行数据
+                        if len(raw_data) > max_rows:
+                            new_raw_data = []
+                            col_count = len(raw_data[0])
+                            left_data = raw_data[:max_rows]
+                            right_data = raw_data[max_rows:]
+                            # 以左侧行数为基准循环
+                            for i in range(max_rows):
+                                row_left = left_data[i]
+                                # 第0行合并表头，其余行合并左右数据
+                                row_right = raw_data[0] if i == 0 else (right_data[i-1] if i-1 < len(right_data) else [''] * col_count)
+                                new_raw_data.append(row_left + row_right)
+                            raw_data = new_raw_data
+
                     # 创建表格
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -282,7 +298,7 @@ def process_smart(doc, text):
                         table.rows[i].height = Cm(0.71)
                         row_str = "".join([str(x) for x in row_values])
                         
-                        # (C) 特殊行合并逻辑：表 10 的 B/C 级标题，或表 12 的级别标题
+                        # (D) 特殊行合并逻辑：表 10 的 B/C 级标题，或表 12 的级别标题
                         is_special_10 = ("B级" in row_str or "C级" in row_str) and current_num == 10
                         is_special_12 = ("国家级" in row_str or "省部级" in row_str) and current_num == 12 and len(set(row_values)) == 1
                         
@@ -306,7 +322,7 @@ def process_smart(doc, text):
                                 if "序号" in header_text: cell.width = Cm(1.0)
                                 elif any(x in header_text for x in ["姓名", "学者", "负责人"]): cell.width = Cm(1.8)
                                 elif any(x in header_text for x in ["单位", "学院", "所属单位"]): cell.width = Cm(4.8)
-                                elif any(x in header_text for x in ["立项数", "项目数量"]): cell.width = Cm(1.5)
+                                elif any(x in header_text for x in ["立项数", "项目数量", "立项数量"]): cell.width = Cm(1.5)
                                 elif "级别" in header_text: cell.width = Cm(2.0)
                                 else: cell.width = Cm(2.5)
 
