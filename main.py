@@ -241,21 +241,24 @@ def process_smart(doc, text):
                 else:
                     # ================= 表格逻辑开始 =================
                     
-                    # (A) 表 11 的特殊处理：第 11 行及之后在右侧显示
-                    if current_num == 11:
-                        max_rows = 11 # 1行表头 + 10行数据
-                        if len(raw_data) > max_rows:
-                            new_raw_data = []
-                            col_count = len(raw_data[0])
-                            left_data = raw_data[:max_rows]
-                            right_data = raw_data[max_rows:]
-                            for i in range(max_rows):
-                                row_left = left_data[i]
-                                row_right = raw_data[0] if i == 0 else (right_data[i-1] if i-1 < len(right_data) else [''] * col_count)
+                    # (A) 表 11, 13, 14 的通用处理：根据数据量动态双栏布局
+                    if current_num in [11, 13, 14]:
+                        # 设阈值为 11 (1行表头 + 10行数据)，如果总行数超过此值，则平分数据进行双栏显示
+                        if len(raw_data) > 11:
+                            header = raw_data[0]
+                            data_body = raw_data[1:]
+                            n = len(data_body)
+                            half = (n + 1) // 2
+                            
+                            new_raw_data = [header + header] # 拼接左右双表头
+                            for i in range(half):
+                                row_left = data_body[i]
+                                # 右侧如果没数据了，补空字符串
+                                row_right = data_body[i + half] if (i + half) < n else [""] * len(header)
                                 new_raw_data.append(row_left + row_right)
                             raw_data = new_raw_data
 
-                    # (B) 表 12 的特殊处理
+                    # (B) 表 12 的特殊处理：按级别（国家级/省部级）分组并左右排版
                     if current_num == 12:
                         df_12 = pd.DataFrame(raw_data[1:], columns=raw_data[0])
                         new_table_data = [["学者", "所属单位", "项目数量", "学者", "所属单位", "项目数量"]]
@@ -272,22 +275,6 @@ def process_smart(doc, text):
                                     right = sub_rows[i + half] if (i + half) < len(sub_rows) else ["", "", ""]
                                     new_table_data.append(left + right)
                         raw_data = new_table_data
-
-                    # (C) 表 13 和表 14 的特殊处理：序号 13 及之后在右侧显示
-                    if current_num in [13, 14]:
-                        max_rows = 13 # 1行表头 + 12行数据
-                        if len(raw_data) > max_rows:
-                            new_raw_data = []
-                            col_count = len(raw_data[0])
-                            left_data = raw_data[:max_rows]
-                            right_data = raw_data[max_rows:]
-                            # 以左侧行数为基准循环
-                            for i in range(max_rows):
-                                row_left = left_data[i]
-                                # 第0行合并表头，其余行合并左右数据
-                                row_right = raw_data[0] if i == 0 else (right_data[i-1] if i-1 < len(right_data) else [''] * col_count)
-                                new_raw_data.append(row_left + row_right)
-                            raw_data = new_raw_data
 
                     # 创建表格
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
