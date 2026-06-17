@@ -146,7 +146,14 @@ def process_smart(doc, text):
     def flush_table():
         nonlocal table_rows, current_title, is_chart_mode
         if not table_rows: return
-        raw_data = [[c.strip() for c in r.split('|') if c.strip()] for r in table_rows if '|' in r and '---' not in r]
+        
+        # 修改：采用切片方式解析，保留空单元格，确保列数对齐
+        raw_data = []
+        for r in table_rows:
+            if '|' in r and '---' not in r:
+                cells = [c.strip() for c in r.split('|')]
+                if len(cells) >= 3:
+                    raw_data.append(cells[1:-1])
         
         if len(raw_data) >= 2:
             try:
@@ -172,7 +179,7 @@ def process_smart(doc, text):
                         custom_bar_colors = ['#F4CCCC', '#F9CB9C', '#FFE599', '#B6D7A8', '#A2C4C9', '#A4C2F4']
                         df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
                         x_labels = [re.sub(r'（.*?）|\(.*?\)|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
-                        categories = [c for c in df_plot.columns[1:] if '合计' not in c]
+                        categories = [c for c in df_plot.columns[1:] if '合计' not in c and c.strip()]
                         x = np.arange(len(x_labels))
                         width = 0.8 / (len(categories) + 1)
                         for i, cat in enumerate(categories):
@@ -248,21 +255,17 @@ def process_smart(doc, text):
                                 new_raw_data.append(row_left + row_right)
                             raw_data = new_raw_data
 
-                    # (B) 表 12 的特殊处理：转换格式为级别分组+双列显示
+                    # (B) 表 12 的特殊处理
                     if current_num == 12:
                         df_12 = pd.DataFrame(raw_data[1:], columns=raw_data[0])
-                        # 新的表头
                         new_table_data = [["学者", "所属单位", "项目数量", "学者", "所属单位", "项目数量"]]
                         levels = ["国家级", "省部级"]
                         for lvl in levels:
                             sub_df = df_12[df_12['级别'].str.contains(lvl, na=False)]
                             if not sub_df.empty:
-                                # 级别行：占满 6 列
                                 suffix = "（大于等于2项）" if lvl == "国家级" else "（大于等于3项）"
                                 new_table_data.append([lvl + suffix] * 6)
-                                # 提取数据行
                                 sub_rows = sub_df[['负责人', '单位', '立项数']].values.tolist()
-                                # 拆分为左右两半
                                 half = (len(sub_rows) + 1) // 2
                                 for i in range(half):
                                     left = sub_rows[i]
@@ -284,16 +287,20 @@ def process_smart(doc, text):
                         is_special_12 = ("国家级" in row_str or "省部级" in row_str) and current_num == 12 and len(set(row_values)) == 1
                         
                         if is_special_10 or is_special_12:
+                            # 提取显示的文字（第一个非空的单元格）
+                            display_text = next((x for x in row_values if x.strip()), "").replace('*', '').strip()
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_values)-1))
                             for p in merged_cell.paragraphs: p.clear()
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                            set_font(p.add_run(str(row_values[0]).replace('*', '').strip()), 11, True)
+                            set_font(p.add_run(display_text), 11, True)
+                            if is_special_10: set_cell_shading(merged_cell, "EBF1DE") # 给表10的标题行加淡绿底色以区分
                         else:
                             for j, val in enumerate(row_values):
+                                if j >= len(table.columns): break
                                 cell = table.cell(i, j)
-                                cell.text = str(val)
+                                cell.text = str(val).replace('*','')
                                 # 动态宽度调整
                                 header_text = str(raw_data[0][j])
                                 if "序号" in header_text: cell.width = Cm(1.0)
@@ -309,12 +316,12 @@ def process_smart(doc, text):
                                 
                                 if i == 0:
                                     set_cell_shading(cell, "4472C4")
-                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 11, True, "FFFFFF")
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, True, "FFFFFF")
                                 elif i % 2 == 0:
                                     set_cell_shading(cell, "D9E1F2")
-                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 11, False)
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, False)
                                 else:
-                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 11, False)
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, False)
                     set_table_border(table)
             except Exception as e: print(f"Error processing {current_title}: {e}")
         table_rows, is_chart_mode, current_title = [], False, ""
