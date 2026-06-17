@@ -231,11 +231,32 @@ def process_smart(doc, text):
                     doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 else:
+                    table_num_match = re.search(r'\d+', current_title)
+                    table_num = int(table_num_match.group()) if table_num_match else 0
+                    
+                    # (2) 新增逻辑：表 11超过10行（即第11行及之后）在右侧另起一列显示
+                    if table_num == 11:
+                        max_rows = 11 # 1行表头 + 10行数据
+                        if len(raw_data) > max_rows:
+                            new_raw_data = []
+                            col_count = len(raw_data[0])
+                            left_data = raw_data[:max_rows]
+                            right_data = raw_data[max_rows:]
+                            
+                            for i in range(max_rows):
+                                row_left = left_data[i]
+                                if i == 0: # 左右两侧均放置表头
+                                    row_right = raw_data[0]
+                                elif i - 1 < len(right_data):
+                                    row_right = right_data[i - 1]
+                                else:
+                                    row_right = [''] * col_count # 补齐空行
+                                new_raw_data.append(row_left + row_right)
+                            raw_data = new_raw_data
+
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     table.allow_autofit = False # 锁定以便手动调整宽度
-                    table_num_match = re.search(r'\d+', current_title)
-                    table_num = int(table_num_match.group()) if table_num_match else 0
 
                     for i, row_data in enumerate(raw_data):
                         table.rows[i].height = Cm(0.71)
@@ -290,7 +311,10 @@ def process_smart(doc, text):
 
     for line in lines:
         l = line.strip()
+        # 处理可能带来的HTML标记，解决由于 <center> 带来的附录标题、图表标题无法对齐及捕获问题
+        l = l.replace('<center>', '').replace('</center>', '') 
         if not l: continue
+        
         if l.startswith('#'):
             flush_table()
             hash_count = l.count('#')
@@ -298,7 +322,8 @@ def process_smart(doc, text):
             if hash_count <= 3:
                 p = doc.add_heading('', level=hash_count)
                 p.paragraph_format.line_spacing = 1.5 # 设置1.5倍行距
-                if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                if "附录" in l: 
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 14, True)
             else:
