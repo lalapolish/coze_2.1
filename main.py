@@ -241,11 +241,10 @@ def process_smart(doc, text):
                         table.rows[i].height = Cm(0.71)
                         row_str = "".join(row_data)
                         
-                        # 【核心修改点】：表 10 处理 B/C 级，表 12 处理 国家级/省部级
-                        is_special_10 = ("B级" in row_str or "C级" in row_str) and table_num == 10
-                        is_special_12 = ("国家级" in row_str or "省部级" in row_str) and table_num == 12
+                        # (2) 表 10 特殊行逻辑：B级和C级标题全行合并
+                        is_special = ("B级" in row_str or "C级" in row_str) and table_num == 10
                         
-                        if is_special_10 or is_special_12:
+                        if is_special:
                             # 彻底修正合并单元格逻辑
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_data)-1))
                             # 清除原有段落并重新添加以确保居中
@@ -256,11 +255,8 @@ def process_smart(doc, text):
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                             # 填入文字并加粗
                             set_font(p.add_run(row_str.replace('*', '').strip()), 11, True)
-                            # 为分类行设置浅蓝色背景
-                            set_cell_shading(merged_cell, "D9E1F2")
                         else:
                             for j, val in enumerate(row_data):
-                                if j >= len(table.columns): break
                                 cell = table.cell(i, j)
                                 cell_text = val
                                 if table_num == 6 and i == 0:
@@ -270,7 +266,7 @@ def process_smart(doc, text):
                                 # (3) 动态调整宽度逻辑
                                 header_content = str(raw_data[0][j])
                                 if "序号" in header_content: cell.width = Cm(1.0)
-                                elif any(x in header_content for x in ["姓名", "学者", "负责人"]): cell.width = Cm(2.0)
+                                elif "姓名" in header_content: cell.width = Cm(1.8)
                                 elif any(x in header_content for x in ["单位", "学院"]): cell.width = Cm(4.8)
                                 elif re.match(r'^20\d{2}$', cell_text) or "年份" in header_content: cell.width = Cm(1.8)
                                 elif "认定等级" in header_content: cell.width = Cm(1.3)
@@ -284,7 +280,7 @@ def process_smart(doc, text):
                                     set_cell_shading(cell, "4472C4")
                                     set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, True, "FFFFFF")
                                 elif i % 2 == 0:
-                                    set_cell_shading(cell, "F2F2F2") # 浅灰色交替
+                                    set_cell_shading(cell, "D9E1F2")
                                     set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
                                 else:
                                     set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
