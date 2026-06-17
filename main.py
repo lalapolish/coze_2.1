@@ -150,24 +150,25 @@ def process_smart(doc, text):
         
         if len(raw_data) >= 2:
             try:
-                df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
-                fig_num_match = re.search(r'\d+', current_title)
-                fig_num = int(fig_num_match.group()) if fig_num_match else 0
+                # 提取表/图编号
+                num_match = re.search(r'\d+', current_title)
+                current_num = int(num_match.group()) if num_match else 0
                 
                 if is_chart_mode:
+                    df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
                     fig, ax = plt.subplots(figsize=(10, 6))
                     def clean(v):
                         s = re.sub(r'[^\d.]', '', str(v))
                         return float(s) if s else 0.0
 
                     # 1. 饼图 (4, 5)
-                    if fig_num in [4, 5]:
+                    if current_num in [4, 5]:
                         v_list = [clean(v) for v in df.iloc[:, 1]]
-                        draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist(), fig_num)
+                        draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist(), current_num)
                         ax.set_xlim(-2.5, 2.5); ax.set_ylim(-1.6, 1.6)
 
-                    # 2. 多系列分组柱状图 (2, 12) - 修改颜色为淡红、橙、黄、绿、青、蓝
-                    elif fig_num in [2, 12]:
+                    # 2. 多系列分组柱状图 (2, 12)
+                    elif current_num in [2, 12]:
                         custom_bar_colors = ['#F4CCCC', '#F9CB9C', '#FFE599', '#B6D7A8', '#A2C4C9', '#A4C2F4']
                         df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
                         x_labels = [re.sub(r'（.*?）|\(.*?\)|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
@@ -182,7 +183,7 @@ def process_smart(doc, text):
                         plt.subplots_adjust(bottom=0.2)
 
                     # 3. 双轴图 (9)
-                    elif fig_num == 9:
+                    elif current_num == 9:
                         years = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
                         counts = [clean(v) for v in df.iloc[:, 1]]; fundings = [clean(v) for v in df.iloc[:, 2]]
                         bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
@@ -200,7 +201,7 @@ def process_smart(doc, text):
                         plt.subplots_adjust(top=0.88, bottom=0.15)
 
                     # 4. 横向趋势图 (10, 11)
-                    elif fig_num in [10, 11]:
+                    elif current_num in [10, 11]:
                         headers = [re.sub(r'[^\d]', '', str(h)) for h in df.columns]
                         year_headers = [h for h in headers if len(h) == 4]
                         if len(year_headers) >= 3:
@@ -223,74 +224,83 @@ def process_smart(doc, text):
                     xy_labels = {1:('发表年份','论文数量'), 2:('年份','论文数量'), 3:('年份','立项数量'), 6:('经费区间（万元）','项目数量'), 
                                  7:('立项年份','项目数量'), 8:('经费区间','项目数量'), 9:('年份','项目数量'), 10:('年份','著作出版数量'), 
                                  11:('年份','获奖数量'), 12:('年份','获奖数量')}
-                    if fig_num in xy_labels:
-                        ax.set_xlabel(xy_labels[fig_num][0], fontweight='bold')
-                        ax.set_ylabel(xy_labels[fig_num][1], fontweight='bold')
+                    if current_num in xy_labels:
+                        ax.set_xlabel(xy_labels[current_num][0], fontweight='bold')
+                        ax.set_ylabel(xy_labels[current_num][1], fontweight='bold')
 
                     buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(); buf.seek(0)
                     doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                 else:
-                    table_num_match = re.search(r'\d+', current_title)
-                    table_num = int(table_num_match.group()) if table_num_match else 0
+                    # ================= 表格逻辑开始 =================
                     
-                    # (2) 新增逻辑：表 11超过10行（即第11行及之后）在右侧另起一列显示
-                    if table_num == 11:
+                    # (A) 表 11 的特殊处理：第 11 行及之后在右侧显示
+                    if current_num == 11:
                         max_rows = 11 # 1行表头 + 10行数据
                         if len(raw_data) > max_rows:
                             new_raw_data = []
                             col_count = len(raw_data[0])
                             left_data = raw_data[:max_rows]
                             right_data = raw_data[max_rows:]
-                            
                             for i in range(max_rows):
                                 row_left = left_data[i]
-                                if i == 0: # 左右两侧均放置表头
-                                    row_right = raw_data[0]
-                                elif i - 1 < len(right_data):
-                                    row_right = right_data[i - 1]
-                                else:
-                                    row_right = [''] * col_count # 补齐空行
+                                row_right = raw_data[0] if i == 0 else (right_data[i-1] if i-1 < len(right_data) else [''] * col_count)
                                 new_raw_data.append(row_left + row_right)
                             raw_data = new_raw_data
 
+                    # (B) 表 12 的特殊处理：转换格式为级别分组+双列显示
+                    if current_num == 12:
+                        df_12 = pd.DataFrame(raw_data[1:], columns=raw_data[0])
+                        # 新的表头
+                        new_table_data = [["学者", "所属单位", "项目数量", "学者", "所属单位", "项目数量"]]
+                        levels = ["国家级", "省部级"]
+                        for lvl in levels:
+                            sub_df = df_12[df_12['级别'].str.contains(lvl, na=False)]
+                            if not sub_df.empty:
+                                # 级别行：占满 6 列
+                                suffix = "（大于等于2项）" if lvl == "国家级" else "（大于等于3项）"
+                                new_table_data.append([lvl + suffix] * 6)
+                                # 提取数据行
+                                sub_rows = sub_df[['负责人', '单位', '立项数']].values.tolist()
+                                # 拆分为左右两半
+                                half = (len(sub_rows) + 1) // 2
+                                for i in range(half):
+                                    left = sub_rows[i]
+                                    right = sub_rows[i + half] if (i + half) < len(sub_rows) else ["", "", ""]
+                                    new_table_data.append(left + right)
+                        raw_data = new_table_data
+
+                    # 创建表格
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    table.allow_autofit = False # 锁定以便手动调整宽度
+                    table.allow_autofit = False
 
-                    for i, row_data in enumerate(raw_data):
+                    for i, row_values in enumerate(raw_data):
                         table.rows[i].height = Cm(0.71)
-                        row_str = "".join(row_data)
+                        row_str = "".join([str(x) for x in row_values])
                         
-                        # (2) 表 10 特殊行逻辑：B级和C级标题全行合并
-                        is_special = ("B级" in row_str or "C级" in row_str) and table_num == 10
+                        # (C) 特殊行合并逻辑：表 10 的 B/C 级标题，或表 12 的级别标题
+                        is_special_10 = ("B级" in row_str or "C级" in row_str) and current_num == 10
+                        is_special_12 = ("国家级" in row_str or "省部级" in row_str) and current_num == 12 and len(set(row_values)) == 1
                         
-                        if is_special:
-                            # 彻底修正合并单元格逻辑
-                            merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_data)-1))
-                            # 清除原有段落并重新添加以确保居中
-                            for p in merged_cell.paragraphs:
-                                p.clear()
+                        if is_special_10 or is_special_12:
+                            merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_values)-1))
+                            for p in merged_cell.paragraphs: p.clear()
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                            # 填入文字并加粗
-                            set_font(p.add_run(row_str.replace('*', '').strip()), 11, True)
+                            set_font(p.add_run(str(row_values[0]).replace('*', '').strip()), 11, True)
                         else:
-                            for j, val in enumerate(row_data):
+                            for j, val in enumerate(row_values):
                                 cell = table.cell(i, j)
-                                cell_text = val
-                                if table_num == 6 and i == 0:
-                                    cell_text = cell_text.replace("（万元）", "").replace("(万元)", "")
-                                cell.text = cell_text
-                                
-                                # (3) 动态调整宽度逻辑
-                                header_content = str(raw_data[0][j])
-                                if "序号" in header_content: cell.width = Cm(1.0)
-                                elif "姓名" in header_content: cell.width = Cm(1.8)
-                                elif any(x in header_content for x in ["单位", "学院"]): cell.width = Cm(4.8)
-                                elif re.match(r'^20\d{2}$', cell_text) or "年份" in header_content: cell.width = Cm(1.8)
-                                elif "认定等级" in header_content: cell.width = Cm(1.3)
+                                cell.text = str(val)
+                                # 动态宽度调整
+                                header_text = str(raw_data[0][j])
+                                if "序号" in header_text: cell.width = Cm(1.0)
+                                elif any(x in header_text for x in ["姓名", "学者", "负责人"]): cell.width = Cm(1.8)
+                                elif any(x in header_text for x in ["单位", "学院", "所属单位"]): cell.width = Cm(4.8)
+                                elif any(x in header_text for x in ["立项数", "项目数量"]): cell.width = Cm(1.5)
+                                elif "级别" in header_text: cell.width = Cm(2.0)
                                 else: cell.width = Cm(2.5)
 
                                 cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
@@ -299,38 +309,32 @@ def process_smart(doc, text):
                                 
                                 if i == 0:
                                     set_cell_shading(cell, "4472C4")
-                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, True, "FFFFFF")
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 11, True, "FFFFFF")
                                 elif i % 2 == 0:
                                     set_cell_shading(cell, "D9E1F2")
-                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 11, False)
                                 else:
-                                    set_font(p.runs[0] if p.runs else p.add_run(cell_text), 11, False)
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 11, False)
                     set_table_border(table)
             except Exception as e: print(f"Error processing {current_title}: {e}")
         table_rows, is_chart_mode, current_title = [], False, ""
 
     for line in lines:
-        l = line.strip()
-        # 处理可能带来的HTML标记，解决由于 <center> 带来的附录标题、图表标题无法对齐及捕获问题
-        l = l.replace('<center>', '').replace('</center>', '') 
+        l = line.strip().replace('<center>', '').replace('</center>', '')
         if not l: continue
-        
         if l.startswith('#'):
             flush_table()
             hash_count = l.count('#')
-            # 只有 1-3 级标题进入目录，4级及以上作为加粗正文处理
             if hash_count <= 3:
                 p = doc.add_heading('', level=hash_count)
-                p.paragraph_format.line_spacing = 1.5 # 设置1.5倍行距
-                if "附录" in l: 
-                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                p.paragraph_format.line_spacing = 1.5
+                if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 14, True)
             else:
                 p = doc.add_paragraph()
-                p.paragraph_format.line_spacing = 1.5 # 设置1.5倍行距
-                run = p.add_run(l.replace('#', '').strip())
-                set_font(run, 12, True)
+                p.paragraph_format.line_spacing = 1.5
+                run = p.add_run(l.replace('#', '').strip()); set_font(run, 12, True)
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
             p = doc.add_paragraph()
@@ -341,7 +345,7 @@ def process_smart(doc, text):
         else:
             if table_rows: flush_table()
             p = doc.add_paragraph()
-            p.paragraph_format.line_spacing = 1.5 # 设置1.5倍行距
+            p.paragraph_format.line_spacing = 1.5
             p.paragraph_format.first_line_indent = Pt(24)
             run = p.add_run(l.replace('**', '')); set_font(run, 12)
     flush_table()
