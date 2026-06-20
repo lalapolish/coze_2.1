@@ -225,7 +225,7 @@ def process_smart(doc, text):
                     else:
                         x_labels = [str(x).replace('万元', '').strip() for x in df.iloc[:, 0]]
                         vals = [clean(v) for v in df.iloc[:, 1]]
-                        bars = ax.bar(x_labels, vals, color='#4472C4', width=0.5)
+                        bars = ax.bar(x_labels, v_list if 'v_list' in locals() else vals, color='#4472C4', width=0.5)
                         for i, v in enumerate(vals): ax.text(i, v, f'{int(v)}', ha='center', va='bottom')
 
                     xy_labels = {1:('发表年份','论文数量'), 2:('年份','论文数量'), 3:('年份','立项数量'), 6:('经费区间（万元）','项目数量'), 
@@ -304,9 +304,9 @@ def process_smart(doc, text):
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                           set_font(p.add_run(display_text), 11, True, "FFFFFF") 
-                         # 设置为蓝色背景 ("4472C4")
-                           if is_special_10: set_cell_shading(merged_cell, "4472C4") # 给表10的标题行加淡绿底色以区分
+                            # 【修改点：设置为与表头一致的蓝底白字】
+                            set_cell_shading(merged_cell, "4472C4")
+                            set_font(p.add_run(display_text), 11, True, "FFFFFF")
                         else:
                             for j, val in enumerate(row_values):
                                 if j >= len(table.columns): break
@@ -356,7 +356,7 @@ def process_smart(doc, text):
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
             
-            # 【修改点：如果是“表”，则立即插入标题（上方）；如果是“图”，此处跳过，留到 flush_table 插入】
+            # 【如果是“表”，则立即插入标题（上方）；如果是“图”，此处跳过，留到 flush_table 插入】
             if not is_chart_mode:
                 p = doc.add_paragraph()
                 p.paragraph_format.line_spacing = 1.5
