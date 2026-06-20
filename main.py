@@ -238,6 +238,13 @@ def process_smart(doc, text):
                     buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(); buf.seek(0)
                     doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    
+                    # 【修改点：图的标题在处理完数据并画完图后插入下方】
+                    p = doc.add_paragraph()
+                    p.paragraph_format.line_spacing = 1.5
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    run = p.add_run(current_title)
+                    set_font(run, 11, True)
                 else:
                     # ================= 表格逻辑开始 =================
                     
@@ -347,10 +354,14 @@ def process_smart(doc, text):
                 run = p.add_run(l.replace('#', '').strip()); set_font(run, 12, True)
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
-            p = doc.add_paragraph()
-            p.paragraph_format.line_spacing = 1.5
-            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            run = p.add_run(current_title); set_font(run, 11, True)
+            
+            # 【修改点：如果是“表”，则立即插入标题（上方）；如果是“图”，此处跳过，留到 flush_table 插入】
+            if not is_chart_mode:
+                p = doc.add_paragraph()
+                p.paragraph_format.line_spacing = 1.5
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                run = p.add_run(current_title); set_font(run, 11, True)
+                
         elif l.startswith('|'): table_rows.append(l)
         else:
             if table_rows: flush_table()
