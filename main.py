@@ -304,8 +304,9 @@ def process_smart(doc, text):
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                            set_font(p.add_run(display_text), 11, True)
-                            if is_special_10: set_cell_shading(merged_cell, "EBF1DE") # 给表10的标题行加淡绿底色以区分
+                           set_font(p.add_run(display_text), 11, True, "FFFFFF") 
+                         # 设置为蓝色背景 ("4472C4")
+                           if is_special_10: set_cell_shading(merged_cell, "4472C4") # 给表10的标题行加淡绿底色以区分
                         else:
                             for j, val in enumerate(row_values):
                                 if j >= len(table.columns): break
