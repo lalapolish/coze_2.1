@@ -121,27 +121,33 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
                 x_text = x_text + 0.12
                 y_text = y_text + 0.02
                 rotation = 0
+                display_label = "A 级"
             elif label == 'B':
-                ha = "center"    # 竖直
+                ha = "left"      # 改成横着显示
                 x_text = x_text - 0.02
                 y_text = y_text + 0.10
-                rotation = 90
+                rotation = 0
+                display_label = "B 级"
             elif label == 'D':
                 ha = "right"     # 朝左
                 x_text = x_text - 0.12
                 y_text = y_text + 0.02
                 rotation = 0
+                display_label = "D 级"
             else:
                 ha = "left" if x > 0 else "right"
                 rotation = 0
+                display_label = f"{label} 级" if label else label
         else:
             ha = "left" if x > 0 else "right"
             rotation = 0
+            label = str(labels[i]).strip()
+            display_label = f"{label} 级" if label else label
         
         # 【需求 5：直线连接，不要拐弯】
         connectionstyle = "arc3,rad=0"
         
-        label_text = f"{labels[i]}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
+        label_text = f"{display_label}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
         ax.annotate(
             label_text,
             xy=(x, y),
@@ -254,18 +260,27 @@ def process_smart(doc, text):
                         
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
                         
-                        # 【修正 1：折线点数字统一放在折线点下方，避免与“年份”重叠】
+                        # 【需求 2：图9样式参考图中样式】
+                        # 折线图数字延伸出一点，延伸线和数字都用白色
                         for i, val in enumerate(fundings):
                             ax2.annotate(
                                 f'{val:.2f}',
                                 xy=(years[i], val),
-                                xytext=(0, -10),   # 统一放在点下方
+                                xytext=(14, -12),   # 延伸一点，放在点右下方
                                 textcoords='offset points',
-                                ha='center',
+                                ha='left',
                                 va='top',
                                 fontsize=12,
                                 fontweight='bold',
-                                color='#C55A11'
+                                color='white',
+                                arrowprops=dict(
+                                    arrowstyle='-',
+                                    color='white',
+                                    lw=1.5,
+                                    shrinkA=0,
+                                    shrinkB=0,
+                                    connectionstyle='arc3,rad=0'
+                                )
                             )
                         
                         # 【修正 2：将图例稍微下移，避免与 x 轴“年份”挤在一起】
