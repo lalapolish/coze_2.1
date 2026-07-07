@@ -272,7 +272,7 @@ def process_smart(doc, text):
                         for i, cat in enumerate(categories):
                             vals = [clean(v) for v in df_plot[cat]]
                             c_key = cat.strip().upper()[0]
-                            bar_color = level_colors.get(c_key, (72/255, 116/255, 203/255))
+                            bar_color = level_colors.get(c_key, (72/255, 116/0, 203/0))
                             
                             rects = ax.bar(x + i*width, vals, width, label=cat, color=bar_color)
                             # 【需求 1：把数字在图中标上】
