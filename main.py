@@ -43,7 +43,13 @@ if os.path.exists(font_path):
     plt.rcParams['font.sans-serif'] = ['SimHei']
 else:
     plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+
+# 【需求 3：图表字体调大并加粗】
 plt.rcParams['axes.unicode_minus'] = False
+plt.rcParams['font.size'] = 14
+plt.rcParams['font.weight'] = 'bold'
+plt.rcParams['axes.labelweight'] = 'bold'
+plt.rcParams['axes.titleweight'] = 'bold'
 
 def set_font(run, size=12, bold=False, color=None):
     """设置字体、大小、加粗及颜色"""
@@ -90,7 +96,7 @@ def set_table_border(table):
     ptr.append(borders)
 
 def draw_custom_pie(ax, values, labels, fig_num=0):
-    """饼图：彻底解决数值重叠问题"""
+    """饼图：【需求 5：短直线且不拐弯】"""
     colors = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47']
     wedges, _ = ax.pie(values, colors=colors[:len(values)], startangle=90, counterclock=False, 
                        wedgeprops={'edgecolor': 'white', 'linewidth': 1})
@@ -100,31 +106,22 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
         ang = (p.theta2 - p.theta1)/2. + p.theta1
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
-        dist = 1.7
         
-        y_text = 1.35 * y
-        if abs(y) < 0.3: y_text = 1.5 * y
-        x_text = dist * np.sign(x) if x != 0 else dist
-        ha = "left" if x_text > 0 else "right"
+        # 缩短延伸距离，使线不要太长
+        dist = 1.25 
+        y_text = dist * y
+        x_text = dist * x
         
-        # 针对图5，强制A向右，B向左延伸
-        if fig_num == 5:
-            lbl_str = str(labels[i]).strip()
-            if lbl_str == 'A':
-                x_text = dist
-                ha = "left"
-                y_text = 1.6
-            elif lbl_str == 'B':
-                x_text = -dist
-                ha = "right"
-                y_text = 1.6
-
-        connectionstyle = f"angle,angleA=0,angleB={ang}"
+        ha = "left" if x > 0 else "right"
+        
+        # 【需求 5：直线连接，不要拐弯】
+        connectionstyle = "arc3,rad=0"
+        
         label_text = f"{labels[i]}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
         ax.annotate(label_text, xy=(x, y), xytext=(x_text, y_text),
                     horizontalalignment=ha, verticalalignment="center",
                     arrowprops=dict(arrowstyle="-", color="black", connectionstyle=connectionstyle),
-                    fontsize=10, fontweight='bold')
+                    fontsize=14, fontweight='bold')
 
 def add_page_number(doc):
     for sec in doc.sections:
@@ -147,7 +144,6 @@ def process_smart(doc, text):
         nonlocal table_rows, current_title, is_chart_mode
         if not table_rows: return
         
-        # 修改：采用切片方式解析，保留空单元格，确保列数对齐
         raw_data = []
         for r in table_rows:
             if '|' in r and '---' not in r:
@@ -157,13 +153,17 @@ def process_smart(doc, text):
         
         if len(raw_data) >= 2:
             try:
-                # 提取表/图编号
                 num_match = re.search(r'\d+', current_title)
                 current_num = int(num_match.group()) if num_match else 0
                 
                 if is_chart_mode:
                     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
                     fig, ax = plt.subplots(figsize=(10, 6))
+                    
+                    # 【需求 4：把所有图表的黑色边框去掉】
+                    for spine in ax.spines.values():
+                        spine.set_visible(False)
+                    
                     def clean(v):
                         s = re.sub(r'[^\d.]', '', str(v))
                         return float(s) if s else 0.0
@@ -172,21 +172,37 @@ def process_smart(doc, text):
                     if current_num in [4, 5]:
                         v_list = [clean(v) for v in df.iloc[:, 1]]
                         draw_custom_pie(ax, v_list, df.iloc[:, 0].tolist(), current_num)
-                        ax.set_xlim(-2.5, 2.5); ax.set_ylim(-1.6, 1.6)
+                        ax.set_xlim(-2.0, 2.0); ax.set_ylim(-1.5, 1.5)
 
                     # 2. 多系列分组柱状图 (2, 12)
                     elif current_num in [2, 12]:
-                        custom_bar_colors = ['#F4CCCC', '#F9CB9C', '#FFE599', '#B6D7A8', '#A2C4C9', '#A4C2F4']
+                        # 【需求 2：A级到F级指定的RGB颜色】
+                        level_colors = {
+                            'A': (229/255, 76/255, 94/255),
+                            'B': (72/255, 116/255, 203/255),
+                            'C': (238/255, 130/255, 47/255),
+                            'D': (242/255, 186/255, 2/255),
+                            'E': (117/255, 189/255, 66/255),
+                            'F': (48/255, 192/255, 180/255)
+                        }
                         df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
                         x_labels = [re.sub(r'（.*?）|\(.*?\)|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
                         categories = [c for c in df_plot.columns[1:] if '合计' not in c and c.strip()]
                         x = np.arange(len(x_labels))
                         width = 0.8 / (len(categories) + 1)
+                        
                         for i, cat in enumerate(categories):
                             vals = [clean(v) for v in df_plot[cat]]
-                            ax.bar(x + i*width, vals, width, label=cat, color=custom_bar_colors[i % len(custom_bar_colors)])
+                            # 根据类别首字母匹配颜色 (A, B, C...)
+                            c_key = cat.strip().upper()[0]
+                            bar_color = level_colors.get(c_key, (72/255, 116/255, 203/255))
+                            
+                            rects = ax.bar(x + i*width, vals, width, label=cat, color=bar_color)
+                            # 【需求 1：把数字在图中标上】
+                            ax.bar_label(rects, padding=3, fontsize=12, fontweight='bold')
+                            
                         ax.set_xticks(x + width*(len(categories)-1)/2); ax.set_xticklabels(x_labels)
-                        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(categories))
+                        ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(categories), frameon=False)
                         plt.subplots_adjust(bottom=0.2)
 
                     # 3. 双轴图 (9)
@@ -194,17 +210,17 @@ def process_smart(doc, text):
                         years = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
                         counts = [clean(v) for v in df.iloc[:, 1]]; fundings = [clean(v) for v in df.iloc[:, 2]]
                         bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
-                        for bar in bars:
-                            h = bar.get_height()
-                            if h > 0: ax.text(bar.get_x() + bar.get_width()/2, h, f'{int(h)}', ha='center', va='bottom', fontsize=10)
+                        # 标数字
+                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
+                        
                         ax2 = ax.twinx()
+                        # 双轴也要去掉右侧和顶部的边框
+                        for spine in ax2.spines.values(): spine.set_visible(False)
+                        
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
                         for i, val in enumerate(fundings):
-                            year_str = str(years[i]).strip()
-                            va_val = 'top' if '2024' in year_str else 'bottom'
-                            ax2.text(years[i], val, f'{val:.2f}', ha='center', va=va_val, fontsize=10, color='#C55A11', 
-                                     bbox=dict(facecolor='white', edgecolor='none', alpha=0.6, pad=0.5))
-                        fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2)
+                            ax2.text(years[i], val, f'{val:.2f}', ha='center', va='bottom', fontsize=12, fontweight='bold', color='#C55A11')
+                        fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2, frameon=False)
                         plt.subplots_adjust(top=0.88, bottom=0.15)
 
                     # 4. 横向趋势图 (10, 11)
@@ -218,15 +234,14 @@ def process_smart(doc, text):
                             x_labels = [re.sub(r'（.*?）|\(.*?\)|万元', '', str(x)) for x in df.iloc[:, 0]]
                             y_vals = [clean(v) for v in df.iloc[:, 1]]
                         bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.5)
-                        for bar in bars:
-                            ax.text(bar.get_x()+bar.get_width()/2, bar.get_height(), f'{int(bar.get_height())}', ha='center', va='bottom', fontweight='bold')
+                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
 
                     # 5. 普通柱状图
                     else:
                         x_labels = [str(x).replace('万元', '').strip() for x in df.iloc[:, 0]]
                         vals = [clean(v) for v in df.iloc[:, 1]]
-                        bars = ax.bar(x_labels, v_list if 'v_list' in locals() else vals, color='#4472C4', width=0.5)
-                        for i, v in enumerate(vals): ax.text(i, v, f'{int(v)}', ha='center', va='bottom')
+                        bars = ax.bar(x_labels, vals, color='#4472C4', width=0.5)
+                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
 
                     xy_labels = {1:('发表年份','论文数量'), 2:('年份','论文数量'), 3:('年份','立项数量'), 6:('经费区间（万元）','项目数量'), 
                                  7:('立项年份','项目数量'), 8:('经费区间','项目数量'), 9:('年份','项目数量'), 10:('年份','著作出版数量'), 
@@ -239,33 +254,26 @@ def process_smart(doc, text):
                     doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                     
-                    # 【修改点：图的标题在处理完数据并画完图后插入下方】
                     p = doc.add_paragraph()
                     p.paragraph_format.line_spacing = 1.5
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     run = p.add_run(current_title)
                     set_font(run, 11, True)
                 else:
-                    # ================= 表格逻辑开始 =================
-                    
-                    # (A) 表 11, 13, 14 的通用处理：根据数据量动态双栏布局
+                    # ================= 表格逻辑（不作任何简化） =================
                     if current_num in [11, 13, 14]:
-                        # 设阈值为 11 (1行表头 + 10行数据)，如果总行数超过此值，则平分数据进行双栏显示
                         if len(raw_data) > 11:
                             header = raw_data[0]
                             data_body = raw_data[1:]
                             n = len(data_body)
                             half = (n + 1) // 2
-                            
-                            new_raw_data = [header + header] # 拼接左右双表头
+                            new_raw_data = [header + header]
                             for i in range(half):
                                 row_left = data_body[i]
-                                # 右侧如果没数据了，补空字符串
                                 row_right = data_body[i + half] if (i + half) < n else [""] * len(header)
                                 new_raw_data.append(row_left + row_right)
                             raw_data = new_raw_data
 
-                    # (B) 表 12 的特殊处理：按级别（国家级/省部级）分组并左右排版
                     if current_num == 12:
                         df_12 = pd.DataFrame(raw_data[1:], columns=raw_data[0])
                         new_table_data = [["学者", "所属单位", "项目数量", "学者", "所属单位", "项目数量"]]
@@ -283,7 +291,6 @@ def process_smart(doc, text):
                                     new_table_data.append(left + right)
                         raw_data = new_table_data
 
-                    # 创建表格
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     table.allow_autofit = False
@@ -291,20 +298,16 @@ def process_smart(doc, text):
                     for i, row_values in enumerate(raw_data):
                         table.rows[i].height = Cm(0.71)
                         row_str = "".join([str(x) for x in row_values])
-                        
-                        # (D) 特殊行合并逻辑：表 10 的 B/C 级标题，或表 12 的级别标题
                         is_special_10 = ("B级" in row_str or "C级" in row_str) and current_num == 10
                         is_special_12 = ("国家级" in row_str or "省部级" in row_str) and current_num == 12 and len(set(row_values)) == 1
                         
                         if is_special_10 or is_special_12:
-                            # 提取显示的文字（第一个非空的单元格）
                             display_text = next((x for x in row_values if x.strip()), "").replace('*', '').strip()
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_values)-1))
                             for p in merged_cell.paragraphs: p.clear()
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                            # 【修改点：设置为与表头一致的蓝底白字】
                             set_cell_shading(merged_cell, "4472C4")
                             set_font(p.add_run(display_text), 11, True, "FFFFFF")
                         else:
@@ -312,7 +315,6 @@ def process_smart(doc, text):
                                 if j >= len(table.columns): break
                                 cell = table.cell(i, j)
                                 cell.text = str(val).replace('*','')
-                                # 动态宽度调整
                                 header_text = str(raw_data[0][j])
                                 if "序号" in header_text: cell.width = Cm(1.0)
                                 elif any(x in header_text for x in ["姓名", "学者", "负责人"]): cell.width = Cm(1.8)
@@ -324,7 +326,6 @@ def process_smart(doc, text):
                                 cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                                 p = cell.paragraphs[0]
                                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                
                                 if i == 0:
                                     set_cell_shading(cell, "4472C4")
                                     set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, True, "FFFFFF")
@@ -355,14 +356,11 @@ def process_smart(doc, text):
                 run = p.add_run(l.replace('#', '').strip()); set_font(run, 12, True)
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
-            
-            # 【如果是“表”，则立即插入标题（上方）；如果是“图”，此处跳过，留到 flush_table 插入】
             if not is_chart_mode:
                 p = doc.add_paragraph()
                 p.paragraph_format.line_spacing = 1.5
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(current_title); set_font(run, 11, True)
-                
         elif l.startswith('|'): table_rows.append(l)
         else:
             if table_rows: flush_table()
