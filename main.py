@@ -112,19 +112,14 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
         
-        # 基础延伸距离
         dist = 1.25
         y_text = dist * y
         x_text = dist * x
-        
-        # ==========================================================
-        # 【修改重点：图4、图5 的 A / B / D 标签错开，避免遮挡】
-        # 1) A：放在更靠右上方
-        # 2) B：不让它朝左，强制偏右显示
-        # 3) D：保持朝左，但稍微上移
-        # ==========================================================
+
         if fig_num in [4, 5]:
             label = str(labels[i]).strip()
+
+            # 统一清理：如果原文本已经包含“级”，就不要再
 
             if label == 'A':
                 ha = "left"
