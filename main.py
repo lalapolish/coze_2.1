@@ -112,16 +112,48 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
         y_text = dist * y
         x_text = dist * x
         
-        ha = "left" if x > 0 else "right"
+        # 【需求 2：图5中 A、B、D 指定方向调整，避免重叠】
+        # 仅对图5生效，且只对 A/B/D 做特殊处理
+        if fig_num == 5:
+            label = str(labels[i]).strip()
+            if label == 'A':
+                ha = "left"      # 朝右
+                x_text = x_text + 0.12
+                y_text = y_text + 0.02
+                rotation = 0
+            elif label == 'B':
+                ha = "center"    # 竖直
+                x_text = x_text - 0.02
+                y_text = y_text + 0.10
+                rotation = 90
+            elif label == 'D':
+                ha = "right"     # 朝左
+                x_text = x_text - 0.12
+                y_text = y_text + 0.02
+                rotation = 0
+            else:
+                ha = "left" if x > 0 else "right"
+                rotation = 0
+        else:
+            ha = "left" if x > 0 else "right"
+            rotation = 0
         
         # 【需求 5：直线连接，不要拐弯】
         connectionstyle = "arc3,rad=0"
         
         label_text = f"{labels[i]}\n{int(values[i])} ({(values[i]/total*100):.1f}%)"
-        ax.annotate(label_text, xy=(x, y), xytext=(x_text, y_text),
-                    horizontalalignment=ha, verticalalignment="center",
-                    arrowprops=dict(arrowstyle="-", color="black", connectionstyle=connectionstyle),
-                    fontsize=14, fontweight='bold')
+        ax.annotate(
+            label_text,
+            xy=(x, y),
+            xytext=(x_text, y_text),
+            horizontalalignment=ha,
+            verticalalignment="center",
+            rotation=rotation,
+            rotation_mode='anchor',
+            arrowprops=dict(arrowstyle="-", color="black", connectionstyle=connectionstyle),
+            fontsize=14,
+            fontweight='bold'
+        )
 
 def add_page_number(doc):
     for sec in doc.sections:
@@ -208,20 +240,37 @@ def process_smart(doc, text):
                     # 3. 双轴图 (9)
                     elif current_num == 9:
                         years = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
-                        counts = [clean(v) for v in df.iloc[:, 1]]; fundings = [clean(v) for v in df.iloc[:, 2]]
+                        counts = [clean(v) for v in df.iloc[:, 1]]
+                        fundings = [clean(v) for v in df.iloc[:, 2]]
+                        
                         bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
                         # 标数字
                         ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
                         
                         ax2 = ax.twinx()
                         # 双轴也要去掉右侧和顶部的边框
-                        for spine in ax2.spines.values(): spine.set_visible(False)
+                        for spine in ax2.spines.values():
+                            spine.set_visible(False)
                         
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
+                        
+                        # 【修正 1：折线点数字统一放在折线点下方，避免与“年份”重叠】
                         for i, val in enumerate(fundings):
-                            ax2.text(years[i], val, f'{val:.2f}', ha='center', va='bottom', fontsize=12, fontweight='bold', color='#C55A11')
-                        fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.02), ncol=2, frameon=False)
-                        plt.subplots_adjust(top=0.88, bottom=0.15)
+                            ax2.annotate(
+                                f'{val:.2f}',
+                                xy=(years[i], val),
+                                xytext=(0, -10),   # 统一放在点下方
+                                textcoords='offset points',
+                                ha='center',
+                                va='top',
+                                fontsize=12,
+                                fontweight='bold',
+                                color='#C55A11'
+                            )
+                        
+                        # 【修正 2：将图例稍微下移，避免与 x 轴“年份”挤在一起】
+                        fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.00), ncol=2, frameon=False)
+                        plt.subplots_adjust(top=0.88, bottom=0.20)
 
                     # 4. 横向趋势图 (10, 11)
                     elif current_num in [10, 11]:
@@ -250,7 +299,10 @@ def process_smart(doc, text):
                         ax.set_xlabel(xy_labels[current_num][0], fontweight='bold')
                         ax.set_ylabel(xy_labels[current_num][1], fontweight='bold')
 
-                    buf = io.BytesIO(); plt.savefig(buf, format='png', dpi=150, bbox_inches='tight'); plt.close(); buf.seek(0)
+                    buf = io.BytesIO()
+                    plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
+                    plt.close()
+                    buf.seek(0)
                     doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
                     
@@ -304,7 +356,8 @@ def process_smart(doc, text):
                         if is_special_10 or is_special_12:
                             display_text = next((x for x in row_values if x.strip()), "").replace('*', '').strip()
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_values)-1))
-                            for p in merged_cell.paragraphs: p.clear()
+                            for p in merged_cell.paragraphs:
+                                p.clear()
                             p = merged_cell.paragraphs[0]
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
@@ -312,16 +365,23 @@ def process_smart(doc, text):
                             set_font(p.add_run(display_text), 11, True, "FFFFFF")
                         else:
                             for j, val in enumerate(row_values):
-                                if j >= len(table.columns): break
+                                if j >= len(table.columns):
+                                    break
                                 cell = table.cell(i, j)
                                 cell.text = str(val).replace('*','')
                                 header_text = str(raw_data[0][j])
-                                if "序号" in header_text: cell.width = Cm(1.0)
-                                elif any(x in header_text for x in ["姓名", "学者", "负责人"]): cell.width = Cm(1.8)
-                                elif any(x in header_text for x in ["单位", "学院", "所属单位"]): cell.width = Cm(4.8)
-                                elif any(x in header_text for x in ["立项数", "项目数量", "立项数量"]): cell.width = Cm(1.5)
-                                elif "级别" in header_text: cell.width = Cm(2.0)
-                                else: cell.width = Cm(2.5)
+                                if "序号" in header_text:
+                                    cell.width = Cm(1.0)
+                                elif any(x in header_text for x in ["姓名", "学者", "负责人"]):
+                                    cell.width = Cm(1.8)
+                                elif any(x in header_text for x in ["单位", "学院", "所属单位"]):
+                                    cell.width = Cm(4.8)
+                                elif any(x in header_text for x in ["立项数", "项目数量", "立项数量"]):
+                                    cell.width = Cm(1.5)
+                                elif "级别" in header_text:
+                                    cell.width = Cm(2.0)
+                                else:
+                                    cell.width = Cm(2.5)
 
                                 cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                                 p = cell.paragraphs[0]
@@ -335,39 +395,49 @@ def process_smart(doc, text):
                                 else:
                                     set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, False)
                     set_table_border(table)
-            except Exception as e: print(f"Error processing {current_title}: {e}")
+            except Exception as e:
+                print(f"Error processing {current_title}: {e}")
         table_rows, is_chart_mode, current_title = [], False, ""
 
     for line in lines:
         l = line.strip().replace('<center>', '').replace('</center>', '')
-        if not l: continue
+        if not l:
+            continue
         if l.startswith('#'):
             flush_table()
             hash_count = l.count('#')
             if hash_count <= 3:
                 p = doc.add_heading('', level=hash_count)
                 p.paragraph_format.line_spacing = 1.5
-                if "附录" in l: p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                if "附录" in l:
+                    p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 14, True)
             else:
                 p = doc.add_paragraph()
                 p.paragraph_format.line_spacing = 1.5
-                run = p.add_run(l.replace('#', '').strip()); set_font(run, 12, True)
+                run = p.add_run(l.replace('#', '').strip())
+                set_font(run, 12, True)
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
-            flush_table(); current_title = l.replace('*', '').strip(); is_chart_mode = "图" in current_title
+            flush_table()
+            current_title = l.replace('*', '').strip()
+            is_chart_mode = "图" in current_title
             if not is_chart_mode:
                 p = doc.add_paragraph()
                 p.paragraph_format.line_spacing = 1.5
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                run = p.add_run(current_title); set_font(run, 11, True)
-        elif l.startswith('|'): table_rows.append(l)
+                run = p.add_run(current_title)
+                set_font(run, 11, True)
+        elif l.startswith('|'):
+            table_rows.append(l)
         else:
-            if table_rows: flush_table()
+            if table_rows:
+                flush_table()
             p = doc.add_paragraph()
             p.paragraph_format.line_spacing = 1.5
             p.paragraph_format.first_line_indent = Pt(24)
-            run = p.add_run(l.replace('**', '')); set_font(run, 12)
+            run = p.add_run(l.replace('**', ''))
+            set_font(run, 12)
     flush_table()
 
 def add_toc(doc):
@@ -388,21 +458,27 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         doc = Document()
         element = doc.settings.element
         update_fields = OxmlElement('w:updateFields'); update_fields.set(qn('w:val'), 'true'); element.append(update_fields)
-        for _ in range(4): doc.add_paragraph()
+        for _ in range(4):
+            doc.add_paragraph()
         p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run("山东师范大学人文社会科学科研成果发展态势分析报告\n（2020-2024）")
-        set_font(run, size=22, bold=True); doc.add_page_break()
-        add_toc(doc); add_page_number(doc)
+        set_font(run, size=22, bold=True)
+        doc.add_page_break()
+        add_toc(doc)
+        add_page_number(doc)
         for i in range(1, 9): 
             txt = getattr(input_data, f"ch{i}_text", "")
-            if txt and txt.strip(): process_smart(doc, txt)
+            if txt and txt.strip():
+                process_smart(doc, txt)
         if input_data.appendix and input_data.appendix.strip():
-            doc.add_page_break(); process_smart(doc, input_data.appendix)
+            doc.add_page_break()
+            process_smart(doc, input_data.appendix)
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
         full_path = os.path.join("static", fname)
         doc.save(full_path)
         return {"file": f"{str(request.base_url).rstrip('/')}/static/{fname}", "status": "success"}
-    except Exception as e: return {"file": "", "status": "error", "message": str(e)}
+    except Exception as e:
+        return {"file": "", "status": "error", "message": str(e)}
 
 if __name__ == "__main__":
     import uvicorn
