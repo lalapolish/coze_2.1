@@ -96,7 +96,7 @@ def set_table_border(table):
     ptr.append(borders)
 
 def draw_custom_pie(ax, values, labels, fig_num=0):
-    """饼图：【需求 5：短直线且不拐弯】"""
+    """饼图：短直线且不拐弯"""
     colors = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47']
     wedges, _ = ax.pie(
         values,
@@ -107,64 +107,69 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
     )
     
     total = sum(values)
+
     for i, p in enumerate(wedges):
         ang = (p.theta2 - p.theta1) / 2.0 + p.theta1
         y = np.sin(np.deg2rad(ang))
         x = np.cos(np.deg2rad(ang))
-        
+
         dist = 1.25
         y_text = dist * y
         x_text = dist * x
 
-        if fig_num in [4, 5]:
-            label = str(labels[i]).strip()
+        label = str(labels[i]).strip()
 
-            # 统一清理：如果原文本已经包含“级”，就不要再
+        # 默认文字
+        display_label = label if label.endswith('级') else f"{label}级"
 
-            if label == 'A':
+        # 图4、图5单独调整
+        if fig_num == 5:
+            # 图5：B 级往左，A 级偏右，D 级保持左侧
+            if label.startswith('A'):
                 ha = "left"
-                x_text = max(x_text, 0.08) + 0.16
-                y_text = y_text + 0.10
-                rotation = 0
-                display_label = "A 级"
+                x_text = max(x_text, 0.10) + 0.18
+                y_text = y_text + 0.08
+                display_label = label if label.endswith('级') else f"{label}级"
 
-            elif label == 'B':
-                # B 不让朝左：明确向右偏移，左对齐
-                ha = "left"
-                x_text = max(x_text, 0.12) + 0.22
+            elif label.startswith('B'):
+                # B 级往左
+                ha = "right"
+                x_text = min(x_text, -0.10) - 0.18
                 y_text = y_text + 0.02
-                rotation = 0
-                display_label = "B 级"
+                display_label = label if label.endswith('级') else f"{label}级"
 
-            elif label == 'D':
+            elif label.startswith('D'):
                 ha = "right"
                 x_text = x_text - 0.12
                 y_text = y_text + 0.02
-                rotation = 0
-                display_label = "D 级"
+                display_label = label if label.endswith('级') else f"{label}级"
 
             else:
                 ha = "left" if x > 0 else "right"
-                rotation = 0
-                display_label = f"{label} 级" if label else label
+
+        elif fig_num == 4:
+            # 图4：不要只按 A/B/D 强行固定，按实际位置来
+            # 如果你的图4只有两个级别，这里保持更自然的左右分布
+            ha = "left" if x > 0 else "right"
+            if x > 0:
+                x_text = x_text + 0.10
+            else:
+                x_text = x_text - 0.10
+            y_text = y_text + 0.02
 
         else:
             ha = "left" if x > 0 else "right"
-            rotation = 0
-            label = str(labels[i]).strip()
-            display_label = f"{label} 级" if label else label
-        
-        # 【需求 5：直线连接，不要拐弯】
+
         connectionstyle = "arc3,rad=0"
-        
         label_text = f"{display_label}\n{int(values[i])} ({(values[i] / total * 100):.1f}%)"
+
         ax.annotate(
             label_text,
             xy=(x, y),
             xytext=(x_text, y_text),
             horizontalalignment=ha,
             verticalalignment="center",
-            rotation=rotation,
+            rotation=0,
             rotation_mode='anchor',
             arrowprops=dict(
                 arrowstyle="-",
