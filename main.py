@@ -21,6 +21,7 @@ from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
 
+
 app = FastAPI(openapi_version="3.0.0")
 
 if not os.path.exists("static"):
@@ -105,10 +106,25 @@ def set_table_border_no_vertical(table):
     tblPr.append(borders)
 
 
-def set_table_row_height(row, height_cm=0.71):
-    """统一设置表格行高"""
-    row.height = Cm(height_cm)
-    row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+def set_table_fixed_layout(table):
+    """设置表格固定布局，减少 Word 自动撑开/换行异常"""
+    tblPr = table._tbl.tblPr
+    if tblPr is None:
+        tblPr = OxmlElement('w:tblPr')
+        table._tbl.insert(0, tblPr)
+
+    layout = OxmlElement('w:tblLayout')
+    layout.set(qn('w:type'), 'fixed')
+    tblPr.append(layout)
+
+
+def set_table_row_height(row, min_height_cm=0.71):
+    """
+    自适应高度，但最小不低于 0.71cm
+    这里使用 AT_LEAST，而不是 EXACTLY
+    """
+    row.height = Cm(min_height_cm)
+    row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
 
 
 def set_paragraph_compact(paragraph, line_spacing=1.0, before=0, after=0):
@@ -117,6 +133,18 @@ def set_paragraph_compact(paragraph, line_spacing=1.0, before=0, after=0):
     paragraph.paragraph_format.space_after = Pt(after)
     paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
     paragraph.paragraph_format.line_spacing = line_spacing
+
+
+def set_cell_text_compact(cell, font_size=10, bold=False, color="000000"):
+    """统一设置单元格内文字紧凑样式"""
+    for p in cell.paragraphs:
+        p.paragraph_format.space_before = Pt(0)
+        p.paragraph_format.space_after = Pt(0)
+        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+        p.paragraph_format.line_spacing = 1.0
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        for r in p.runs:
+            set_font(r, font_size, bold, color)
 
 
 def style_data_source_paragraph(paragraph):
@@ -220,7 +248,7 @@ def process_smart(doc, text):
     text = re.sub(r'\([\d\.\+\-\*/\s]+\s*[≈=]\s*[\d\.\%]+\)', '', text)
     lines = text.split('\n')
     table_rows, current_title, is_chart_mode = [], "", False
-    in_data_source = False  # 是否处于 1.3 数据来源正文部分
+    in_data_source = False
 
     def flush_table():
         nonlocal table_rows, current_title, is_chart_mode
@@ -275,7 +303,6 @@ def process_smart(doc, text):
                             vals = [clean(v) for v in df_plot[cat]]
                             c_key = str(cat).strip().upper()[0]
                             bar_color = level_colors.get(c_key, (72/255, 116/255, 203/255))
-
                             rects = ax.bar(x + i * width, vals, width, label=cat, color=bar_color)
                             ax.bar_label(rects, padding=3, fontsize=12, fontweight='bold')
 
@@ -341,7 +368,6 @@ def process_smart(doc, text):
                         bars = ax.bar(x_labels, vals, color='#4472C4', width=0.38)
                         ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
 
-                    # 横纵坐标名称：单独加大加粗
                     xy_labels = {
                         1: ('发表年份', '论文数量'),
                         2: ('年份', '论文数量'),
@@ -411,8 +437,9 @@ def process_smart(doc, text):
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     table.autofit = True
                     table.allow_autofit = True
+                    set_table_fixed_layout(table)
 
-                    # 所有行统一设置 0.71cm
+                    # 改为自适应高度，但最小高度不低于 0.71cm
                     for row in table.rows:
                         set_table_row_height(row, 0.71)
 
@@ -432,6 +459,7 @@ def process_smart(doc, text):
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             p.paragraph_format.space_before = Pt(0)
                             p.paragraph_format.space_after = Pt(0)
+                            p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
                             p.paragraph_format.line_spacing = 1.0
 
                             run = p.add_run(display_text)
@@ -449,27 +477,28 @@ def process_smart(doc, text):
                                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                 p.paragraph_format.space_before = Pt(0)
                                 p.paragraph_format.space_after = Pt(0)
+                                p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
                                 p.paragraph_format.line_spacing = 1.0
 
+                                # 为了尽量避免两行，表格字体略微缩小
                                 if i == 0:
                                     set_cell_shading(cell, "4472C4")
                                     if p.runs:
-                                        set_font(p.runs[0], 10, True, "FFFFFF")
+                                        set_font(p.runs[0], 9, True, "FFFFFF")
                                     else:
-                                        set_font(p.add_run(str(val)), 10, True, "FFFFFF")
+                                        set_font(p.add_run(str(val)), 9, True, "FFFFFF")
                                 elif i % 2 == 0:
                                     set_cell_shading(cell, "D9E1F2")
                                     if p.runs:
-                                        set_font(p.runs[0], 10, False, "000000")
+                                        set_font(p.runs[0], 9, False, "000000")
                                     else:
-                                        set_font(p.add_run(str(val)), 10, False, "000000")
+                                        set_font(p.add_run(str(val)), 9, False, "000000")
                                 else:
                                     if p.runs:
-                                        set_font(p.runs[0], 10, False, "000000")
+                                        set_font(p.runs[0], 9, False, "000000")
                                     else:
-                                        set_font(p.add_run(str(val)), 10, False, "000000")
+                                        set_font(p.add_run(str(val)), 9, False, "000000")
 
-                    # 去掉竖线，只保留横线
                     set_table_border_no_vertical(table)
 
             except Exception as e:
