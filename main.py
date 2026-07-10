@@ -124,7 +124,7 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
 
         # 图4、图5单独调整
         if fig_num == 5:
-            # 图5：B 级往左，A 级偏右，D 级保持左侧
+            # 图5：B 级往左，A 级偏右，D 级保持左侧，并将 D 级引线改为水平
             if label.startswith('A'):
                 ha = "left"
                 x_text = max(x_text, 0.10) + 0.18
@@ -139,9 +139,10 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
                 display_label = label if label.endswith('级') else f"{label}级"
 
             elif label.startswith('D'):
+                # D 级：引线改成水平线
                 ha = "right"
-                x_text = x_text - 0.12
-                y_text = y_text + 0.02
+                x_text = x_text - 0.20
+                y_text = y
                 display_label = label if label.endswith('级') else f"{label}级"
 
             else:
