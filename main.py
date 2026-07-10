@@ -8,16 +8,18 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import matplotlib.font_manager as fm
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
+
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
+from docx.enum.table import WD_ALIGN_VERTICAL
 
 app = FastAPI(openapi_version="3.0.0")
 
@@ -25,16 +27,18 @@ if not os.path.exists("static"):
     os.makedirs("static")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
 class ReportInput(BaseModel):
-    ch1_text: Optional[str] = ""  
+    ch1_text: Optional[str] = ""
     ch2_text: Optional[str] = ""
     ch3_text: Optional[str] = ""
     ch4_text: Optional[str] = ""
     ch5_text: Optional[str] = ""
     ch6_text: Optional[str] = ""
     ch7_text: Optional[str] = ""
-    ch8_text: Optional[str] = "" 
-    appendix: Optional[str] = ""  # 新增附录变量
+    ch8_text: Optional[str] = ""
+    appendix: Optional[str] = ""
+
 
 # ================= 解决图片方框：强制加载本地 SimHei.ttf =================
 font_path = os.path.join(os.getcwd(), 'SimHei.ttf')
@@ -50,6 +54,7 @@ plt.rcParams['font.weight'] = 'bold'
 plt.rcParams['axes.labelweight'] = 'bold'
 plt.rcParams['axes.titleweight'] = 'bold'
 
+
 def set_font(run, size=12, bold=False, color=None):
     """设置字体、大小、加粗及颜色"""
     run.font.size = Pt(size)
@@ -62,6 +67,7 @@ def set_font(run, size=12, bold=False, color=None):
     rFonts.set(qn('w:eastAsia'), '宋体')
     rPr.append(rFonts)
 
+
 def set_cell_shading(cell, color):
     """设置单元格背景颜色"""
     tcPr = cell._tc.get_or_add_tcPr()
@@ -71,26 +77,26 @@ def set_cell_shading(cell, color):
     shd.set(qn('w:fill'), color)
     tcPr.append(shd)
 
+
 def set_table_border(table):
-    """为表格设置蓝色的外边框线"""
+    """为表格设置蓝色边框线"""
     tbl = table._tbl
-    ptr = tbl.get_or_add_tblPr()
+    tblPr = tbl.tblPr
+    if tblPr is None:
+        tblPr = OxmlElement('w:tblPr')
+        tbl.insert(0, tblPr)
+
     borders = OxmlElement('w:tblBorders')
-    
-    for border_name in ['top', 'bottom', 'left', 'right']:
+
+    for border_name in ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']:
         edge = OxmlElement(f'w:{border_name}')
         edge.set(qn('w:val'), 'single')
-        edge.set(qn('w:sz'), '12')
+        edge.set(qn('w:sz'), '8')
         edge.set(qn('w:color'), '4472C4')
         borders.append(edge)
-    
-    inside_h = OxmlElement('w:insideH')
-    inside_h.set(qn('w:val'), 'single')
-    inside_h.set(qn('w:sz'), '4')
-    inside_h.set(qn('w:color'), '4472C4')
-    borders.append(inside_h)
-    
-    ptr.append(borders)
+
+    tblPr.append(borders)
+
 
 def draw_custom_pie(ax, values, labels, fig_num=0):
     """饼图：短直线且不拐弯"""
@@ -102,7 +108,7 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
         counterclock=False,
         wedgeprops={'edgecolor': 'white', 'linewidth': 1}
     )
-    
+
     total = sum(values)
 
     for i, p in enumerate(wedges):
@@ -162,6 +168,7 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
             fontweight='bold'
         )
 
+
 def add_page_number(doc):
     for sec in doc.sections:
         footer = sec.footer
@@ -177,52 +184,6 @@ def add_page_number(doc):
         fldChar2.set(qn('w:fldCharType'), 'end')
         run._r.extend([fldChar1, instrText, fldChar2])
 
-def set_table_full_width(table, doc):
-    """设置表格尽量铺满页面宽度"""
-    section = doc.sections[0]
-    usable_width = section.page_width - section.left_margin - section.right_margin
-
-    table.autofit = False
-    table.allow_autofit = False
-
-    tbl = table._tbl
-    tblPr = tbl.tblPr
-    if tblPr is None:
-        tblPr = OxmlElement('w:tblPr')
-        tbl.insert(0, tblPr)
-
-    tblW = tblPr.find(qn('w:tblW'))
-    if tblW is None:
-        tblW = OxmlElement('w:tblW')
-        tblPr.append(tblW)
-    tblW.set(qn('w:w'), str(int(usable_width.twips)))
-    tblW.set(qn('w:type'), 'dxa')
-
-def set_table_fixed_layout(table):
-    """固定表格布局，避免 Word 自动挤压导致表格消失或错位"""
-    tblPr = table._tbl.tblPr
-    if tblPr is None:
-        tblPr = OxmlElement('w:tblPr')
-        table._tbl.insert(0, tblPr)
-
-    tblLayout = tblPr.find(qn('w:tblLayout'))
-    if tblLayout is None:
-        tblLayout = OxmlElement('w:tblLayout')
-        tblPr.append(tblLayout)
-    tblLayout.set(qn('w:type'), 'fixed')
-
-def set_all_table_cells_center_and_height(table, row_height_cm=0.71):
-    """统一单元格高度、垂直居中、文字水平居中"""
-    for row in table.rows:
-        row.height = Cm(row_height_cm)
-        row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
-        for cell in row.cells:
-            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-            for paragraph in cell.paragraphs:
-                paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                paragraph.paragraph_format.space_before = Pt(0)
-                paragraph.paragraph_format.space_after = Pt(0)
-                paragraph.paragraph_format.line_spacing = 1.0
 
 def process_smart(doc, text):
     text = text.replace('\\%', '%').replace('$$', '').replace('\r', '')
@@ -234,26 +195,26 @@ def process_smart(doc, text):
         nonlocal table_rows, current_title, is_chart_mode
         if not table_rows:
             return
-        
+
         raw_data = []
         for r in table_rows:
             if '|' in r and '---' not in r:
                 cells = [c.strip() for c in r.split('|')]
                 if len(cells) >= 3:
                     raw_data.append(cells[1:-1])
-        
+
         if len(raw_data) >= 2:
             try:
                 num_match = re.search(r'\d+', current_title)
                 current_num = int(num_match.group()) if num_match else 0
-                
+
                 if is_chart_mode:
                     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
                     fig, ax = plt.subplots(figsize=(10, 6))
-                    
+
                     for spine in ax.spines.values():
                         spine.set_visible(False)
-                    
+
                     def clean(v):
                         s = re.sub(r'[^\d.]', '', str(v))
                         return float(s) if s else 0.0
@@ -273,20 +234,20 @@ def process_smart(doc, text):
                             'E': (117/255, 189/255, 66/255),
                             'F': (48/255, 192/255, 180/255)
                         }
-                        df_plot = df[~df.iloc[:, 0].str.contains('合计|总计', na=False)]
+                        df_plot = df[~df.iloc[:, 0].astype(str).str.contains('合计|总计', na=False)]
                         x_labels = [re.sub(r'（.*?）|\(.*?\)|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
-                        categories = [c for c in df_plot.columns[1:] if '合计' not in c and c.strip()]
+                        categories = [c for c in df_plot.columns[1:] if '合计' not in c and str(c).strip()]
                         x = np.arange(len(x_labels))
                         width = 0.6 / max(len(categories), 1)
-                        
+
                         for i, cat in enumerate(categories):
                             vals = [clean(v) for v in df_plot[cat]]
-                            c_key = cat.strip().upper()[0]
+                            c_key = str(cat).strip().upper()[0]
                             bar_color = level_colors.get(c_key, (72/255, 116/255, 203/255))
-                            
+
                             rects = ax.bar(x + i * width, vals, width, label=cat, color=bar_color)
                             ax.bar_label(rects, padding=3, fontsize=12, fontweight='bold')
-                            
+
                         ax.set_xticks(x + width * (len(categories) - 1) / 2)
                         ax.set_xticklabels(x_labels, fontsize=13, fontweight='bold')
                         ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(categories), frameon=False)
@@ -296,16 +257,16 @@ def process_smart(doc, text):
                         years = [re.sub(r'（.*?）|\(.*?\)', '', str(x)) for x in df.iloc[:, 0]]
                         counts = [clean(v) for v in df.iloc[:, 1]]
                         fundings = [clean(v) for v in df.iloc[:, 2]]
-                        
+
                         bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.38)
                         ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
-                        
+
                         ax2 = ax.twinx()
                         for spine in ax2.spines.values():
                             spine.set_visible(False)
-                        
+
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
-                        
+
                         for i, val in enumerate(fundings):
                             ax2.annotate(
                                 f'{val:.2f}',
@@ -326,7 +287,7 @@ def process_smart(doc, text):
                                     connectionstyle='arc3,rad=0'
                                 )
                             )
-                        
+
                         fig.legend(loc='lower center', bbox_to_anchor=(0.5, 0.00), ncol=2, frameon=False)
                         plt.subplots_adjust(top=0.88, bottom=0.20)
 
@@ -339,6 +300,7 @@ def process_smart(doc, text):
                         else:
                             x_labels = [re.sub(r'（.*?）|\(.*?\)|万元', '', str(x)) for x in df.iloc[:, 0]]
                             y_vals = [clean(v) for v in df.iloc[:, 1]]
+
                         bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.38)
                         ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
 
@@ -375,12 +337,13 @@ def process_smart(doc, text):
                     buf.seek(0)
                     doc.add_picture(buf, width=Inches(5.6))
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    
+
                     p = doc.add_paragraph()
                     p.paragraph_format.line_spacing = 1.5
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     run = p.add_run(current_title)
                     set_font(run, 11, True, "000000")
+
                 else:
                     if current_num in [11, 13, 14]:
                         if len(raw_data) > 11:
@@ -400,7 +363,7 @@ def process_smart(doc, text):
                         new_table_data = [["学者", "所属单位", "项目数量", "学者", "所属单位", "项目数量"]]
                         levels = ["国家级", "省部级"]
                         for lvl in levels:
-                            sub_df = df_12[df_12['级别'].str.contains(lvl, na=False)]
+                            sub_df = df_12[df_12['级别'].astype(str).str.contains(lvl, na=False)]
                             if not sub_df.empty:
                                 suffix = "（大于等于2项）" if lvl == "国家级" else "（大于等于3项）"
                                 new_table_data.append([lvl + suffix] * 6)
@@ -414,65 +377,38 @@ def process_smart(doc, text):
 
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                    table.allow_autofit = False
-                    set_table_fixed_layout(table)
-                    set_table_full_width(table, doc)
-
-                    section = doc.sections[0]
-                    usable_width = section.page_width - section.left_margin - section.right_margin
-                    col_count = len(raw_data[0])
-                    col_width = usable_width / col_count
-
-                    for row in table.rows:
-                        for cell in row.cells:
-                            cell.width = col_width
+                    table.autofit = True
+                    table.allow_autofit = True
 
                     for i, row_values in enumerate(raw_data):
-                        row = table.rows[i]
-                        row.height = Cm(0.71)
-                        row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
-
                         row_str = "".join([str(x) for x in row_values])
                         is_special_10 = ("B级" in row_str or "C级" in row_str) and current_num == 10
                         is_special_12 = ("国家级" in row_str or "省部级" in row_str) and current_num == 12 and len(set(row_values)) == 1
-                        
+
                         if is_special_10 or is_special_12:
-                            display_text = next((x for x in row_values if x.strip()), "").replace('*', '').strip()
-                            merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_values)-1))
+                            display_text = next((x for x in row_values if str(x).strip()), "").replace('*', '').strip()
+                            merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_values) - 1))
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-                            for p in merged_cell.paragraphs:
-                                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-                                p.paragraph_format.space_before = Pt(0)
-                                p.paragraph_format.space_after = Pt(0)
-                                p.paragraph_format.line_spacing = 1.0
                             set_cell_shading(merged_cell, "4472C4")
-                            if merged_cell.paragraphs and merged_cell.paragraphs[0].runs:
-                                merged_cell.paragraphs[0].runs[0].text = ""
+
+                            merged_cell.text = ""
                             p = merged_cell.paragraphs[0]
+                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            p.paragraph_format.space_before = Pt(0)
+                            p.paragraph_format.space_after = Pt(0)
+                            p.paragraph_format.line_spacing = 1.0
+
                             run = p.add_run(display_text)
                             set_font(run, 11, True, "FFFFFF")
                         else:
                             for j, val in enumerate(row_values):
                                 if j >= len(table.columns):
                                     break
+
                                 cell = table.cell(i, j)
                                 cell.text = str(val).replace('*', '')
-                                header_text = str(raw_data[0][j])
-
-                                if "序号" in header_text:
-                                    cell.width = Cm(1.0)
-                                elif any(x in header_text for x in ["姓名", "学者", "负责人"]):
-                                    cell.width = Cm(1.8)
-                                elif any(x in header_text for x in ["单位", "学院", "所属单位"]):
-                                    cell.width = Cm(4.8)
-                                elif any(x in header_text for x in ["立项数", "项目数量", "立项数量"]):
-                                    cell.width = Cm(1.5)
-                                elif "级别" in header_text:
-                                    cell.width = Cm(2.0)
-                                else:
-                                    cell.width = Cm(2.5)
-
                                 cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+
                                 p = cell.paragraphs[0]
                                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                 p.paragraph_format.space_before = Pt(0)
@@ -497,16 +433,18 @@ def process_smart(doc, text):
                                     else:
                                         set_font(p.add_run(str(val)), 10, False, "000000")
 
-                    set_all_table_cells_center_and_height(table, row_height_cm=0.71)
                     set_table_border(table)
+
             except Exception as e:
                 print(f"Error processing {current_title}: {e}")
+
         table_rows, is_chart_mode, current_title = [], False, ""
 
     for line in lines:
         l = line.strip().replace('<center>', '').replace('</center>', '')
         if not l:
             continue
+
         if l.startswith('#'):
             flush_table()
             hash_count = l.count('#')
@@ -522,6 +460,7 @@ def process_smart(doc, text):
                 p.paragraph_format.line_spacing = 1.5
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 12, True, "000000")
+
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table()
             current_title = l.replace('*', '').strip()
@@ -532,8 +471,10 @@ def process_smart(doc, text):
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(current_title)
                 set_font(run, 11, True, "000000")
+
         elif l.startswith('|'):
             table_rows.append(l)
+
         else:
             if table_rows:
                 flush_table()
@@ -542,33 +483,44 @@ def process_smart(doc, text):
             p.paragraph_format.first_line_indent = Pt(24)
             run = p.add_run(l.replace('**', ''))
             set_font(run, 12, False, "000000")
+
     flush_table()
+
 
 def add_toc(doc):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
     run = p.add_run("目  录")
     set_font(run, size=16, bold=True, color="000000")
+
     p_toc = doc.add_paragraph()
     run_toc = p_toc.add_run()
+
     fldChar1 = OxmlElement('w:fldChar')
     fldChar1.set(qn('w:fldCharType'), 'begin')
+
     instrText = OxmlElement('w:instrText')
     instrText.set(qn('xml:space'), 'preserve')
     instrText.text = 'TOC \\o "1-3" \\h \\z \\u'
+
     fldChar2 = OxmlElement('w:fldChar')
     fldChar2.set(qn('w:fldCharType'), 'separate')
+
     hint_text = OxmlElement('w:t')
     hint_text.text = "（请在此处右键单击，选择“更新域”以生成目录内容）"
+
     fldChar3 = OxmlElement('w:fldChar')
     fldChar3.set(qn('w:fldCharType'), 'end')
+
     run_toc._r.extend([fldChar1, instrText, fldChar2, hint_text, fldChar3])
     doc.add_page_break()
+
 
 @app.post("/generate_report_word")
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
+
         element = doc.settings.element
         update_fields = OxmlElement('w:updateFields')
         update_fields.set(qn('w:val'), 'true')
@@ -586,7 +538,7 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         add_toc(doc)
         add_page_number(doc)
 
-        for i in range(1, 9): 
+        for i in range(1, 9):
             txt = getattr(input_data, f"ch{i}_text", "")
             if txt and txt.strip():
                 process_smart(doc, txt)
@@ -598,9 +550,12 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
         full_path = os.path.join("static", fname)
         doc.save(full_path)
+
         return {"file": f"{str(request.base_url).rstrip('/')}/static/{fname}", "status": "success"}
+
     except Exception as e:
         return {"file": "", "status": "error", "message": str(e)}
+
 
 if __name__ == "__main__":
     import uvicorn
