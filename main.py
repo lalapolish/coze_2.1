@@ -18,8 +18,8 @@ from docx import Document
 from docx.shared import Pt, Inches, RGBColor, Cm
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
 
 app = FastAPI(openapi_version="3.0.0")
 
@@ -78,8 +78,8 @@ def set_cell_shading(cell, color):
     tcPr.append(shd)
 
 
-def set_table_border(table):
-    """为表格设置蓝色边框线"""
+def set_table_border_no_vertical(table):
+    """表格边框：保留横线，去掉竖线"""
     tbl = table._tbl
     tblPr = tbl.tblPr
     if tblPr is None:
@@ -88,14 +88,44 @@ def set_table_border(table):
 
     borders = OxmlElement('w:tblBorders')
 
-    for border_name in ['top', 'bottom', 'left', 'right', 'insideH', 'insideV']:
+    # 保留外边框上下线和内部横线，去掉竖线
+    for border_name in ['top', 'bottom', 'insideH']:
         edge = OxmlElement(f'w:{border_name}')
         edge.set(qn('w:val'), 'single')
         edge.set(qn('w:sz'), '8')
         edge.set(qn('w:color'), '4472C4')
         borders.append(edge)
 
+    # 竖线全部去掉
+    for border_name in ['left', 'right', 'insideV']:
+        edge = OxmlElement(f'w:{border_name}')
+        edge.set(qn('w:val'), 'nil')
+        borders.append(edge)
+
     tblPr.append(borders)
+
+
+def set_table_row_height(row, height_cm=0.71):
+    """统一设置表格行高"""
+    row.height = Cm(height_cm)
+    row.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+
+
+def set_paragraph_compact(paragraph, line_spacing=1.0, before=0, after=0):
+    """设置段落紧凑，避免段间距过大"""
+    paragraph.paragraph_format.space_before = Pt(before)
+    paragraph.paragraph_format.space_after = Pt(after)
+    paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+    paragraph.paragraph_format.line_spacing = line_spacing
+
+
+def style_data_source_paragraph(paragraph):
+    """‘1.3 数据来源’下的正文段落：取消段间距"""
+    paragraph.paragraph_format.space_before = Pt(0)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+    paragraph.paragraph_format.line_spacing = 1.0
+    paragraph.paragraph_format.first_line_indent = Pt(24)
 
 
 def draw_custom_pie(ax, values, labels, fig_num=0):
@@ -190,6 +220,7 @@ def process_smart(doc, text):
     text = re.sub(r'\([\d\.\+\-\*/\s]+\s*[≈=]\s*[\d\.\%]+\)', '', text)
     lines = text.split('\n')
     table_rows, current_title, is_chart_mode = [], "", False
+    in_data_source = False  # 是否处于 1.3 数据来源正文部分
 
     def flush_table():
         nonlocal table_rows, current_title, is_chart_mode
@@ -310,6 +341,7 @@ def process_smart(doc, text):
                         bars = ax.bar(x_labels, vals, color='#4472C4', width=0.38)
                         ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
 
+                    # 横纵坐标名称：单独加大加粗
                     xy_labels = {
                         1: ('发表年份', '论文数量'),
                         2: ('年份', '论文数量'),
@@ -323,8 +355,8 @@ def process_smart(doc, text):
                         12: ('年份', '获奖数量')
                     }
                     if current_num in xy_labels:
-                        ax.set_xlabel(xy_labels[current_num][0], fontweight='bold', fontsize=14)
-                        ax.set_ylabel(xy_labels[current_num][1], fontweight='bold', fontsize=14)
+                        ax.set_xlabel(xy_labels[current_num][0], fontweight='bold', fontsize=17, labelpad=8)
+                        ax.set_ylabel(xy_labels[current_num][1], fontweight='bold', fontsize=17, labelpad=8)
                         ax.tick_params(axis='both', labelsize=13)
                         for tick in ax.get_xticklabels():
                             tick.set_fontweight('bold')
@@ -339,7 +371,7 @@ def process_smart(doc, text):
                     doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
 
                     p = doc.add_paragraph()
-                    p.paragraph_format.line_spacing = 1.5
+                    set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     run = p.add_run(current_title)
                     set_font(run, 11, True, "000000")
@@ -379,6 +411,10 @@ def process_smart(doc, text):
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     table.autofit = True
                     table.allow_autofit = True
+
+                    # 所有行统一设置 0.71cm
+                    for row in table.rows:
+                        set_table_row_height(row, 0.71)
 
                     for i, row_values in enumerate(raw_data):
                         row_str = "".join([str(x) for x in row_values])
@@ -433,7 +469,8 @@ def process_smart(doc, text):
                                     else:
                                         set_font(p.add_run(str(val)), 10, False, "000000")
 
-                    set_table_border(table)
+                    # 去掉竖线，只保留横线
+                    set_table_border_no_vertical(table)
 
             except Exception as e:
                 print(f"Error processing {current_title}: {e}")
@@ -445,19 +482,32 @@ def process_smart(doc, text):
         if not l:
             continue
 
+        # 识别“1.3 数据来源”
+        if re.match(r'^\d+\.\d+\s*数据来源', l):
+            flush_table()
+            in_data_source = True
+            p = doc.add_paragraph()
+            set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
+            run = p.add_run(l)
+            set_font(run, 14, True, "000000")
+            continue
+
         if l.startswith('#'):
             flush_table()
+            in_data_source = False
             hash_count = l.count('#')
             if hash_count <= 3:
                 p = doc.add_heading('', level=hash_count)
                 p.paragraph_format.line_spacing = 1.5
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
                 if "附录" in l:
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 14, True, "000000")
             else:
                 p = doc.add_paragraph()
-                p.paragraph_format.line_spacing = 1.5
+                set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 12, True, "000000")
 
@@ -465,9 +515,10 @@ def process_smart(doc, text):
             flush_table()
             current_title = l.replace('*', '').strip()
             is_chart_mode = "图" in current_title
+            in_data_source = False
             if not is_chart_mode:
                 p = doc.add_paragraph()
-                p.paragraph_format.line_spacing = 1.5
+                set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(current_title)
                 set_font(run, 11, True, "000000")
@@ -478,9 +529,16 @@ def process_smart(doc, text):
         else:
             if table_rows:
                 flush_table()
+
             p = doc.add_paragraph()
-            p.paragraph_format.line_spacing = 1.5
-            p.paragraph_format.first_line_indent = Pt(24)
+            if in_data_source:
+                style_data_source_paragraph(p)
+            else:
+                p.paragraph_format.line_spacing = 1.5
+                p.paragraph_format.space_before = Pt(0)
+                p.paragraph_format.space_after = Pt(0)
+                p.paragraph_format.first_line_indent = Pt(24)
+
             run = p.add_run(l.replace('**', ''))
             set_font(run, 12, False, "000000")
 
