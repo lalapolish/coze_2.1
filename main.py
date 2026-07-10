@@ -18,6 +18,7 @@ from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_ALIGN_VERTICAL
+from docx.enum.section import WD_SECTION
 
 app = FastAPI(openapi_version="3.0.0")
 
@@ -34,7 +35,7 @@ class ReportInput(BaseModel):
     ch6_text: Optional[str] = ""
     ch7_text: Optional[str] = ""
     ch8_text: Optional[str] = "" 
-    appendix: Optional[str] = "" # 新增附录变量
+    appendix: Optional[str] = ""  # 新增附录变量
 
 # ================= 解决图片方框：强制加载本地 SimHei.ttf =================
 font_path = os.path.join(os.getcwd(), 'SimHei.ttf')
@@ -44,14 +45,14 @@ if os.path.exists(font_path):
 else:
     plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
 
-# 【需求 3：图表字体调大并加粗】
+# 图表基础字体设置
 plt.rcParams['axes.unicode_minus'] = False
 plt.rcParams['font.size'] = 14
 plt.rcParams['font.weight'] = 'bold'
 plt.rcParams['axes.labelweight'] = 'bold'
 plt.rcParams['axes.titleweight'] = 'bold'
 
-def set_font(run, size=12, bold=False, color=None):
+def set_font(run, size=12, bold=False, color="000000"):
     """设置字体、大小、加粗及颜色"""
     run.font.size = Pt(size)
     run.font.name = '宋体'
@@ -95,6 +96,37 @@ def set_table_border(table):
     
     ptr.append(borders)
 
+def set_table_width(table, width_cm=16.0):
+    """尽量让表格左右与页面边缘对齐，保持统一宽度"""
+    table.autofit = False
+    table.allow_autofit = False
+
+    tbl = table._tbl
+    tblPr = tbl.tblPr
+    tblW = tblPr.first_child_found_in("w:tblW")
+    if tblW is None:
+        tblW = OxmlElement('w:tblW')
+        tblPr.append(tblW)
+    tblW.set(qn('w:type'), 'dxa')
+    tblW.set(qn('w:w'), str(int(width_cm * 567)))
+
+def set_cell_margins(cell, top=0, start=0, bottom=0, end=0):
+    """设置单元格内边距，减少左右不齐的观感"""
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    tcMar = tcPr.first_child_found_in("w:tcMar")
+    if tcMar is None:
+        tcMar = OxmlElement('w:tcMar')
+        tcPr.append(tcMar)
+
+    for m_name, m_val in [('top', top), ('start', start), ('bottom', bottom), ('end', end)]:
+        node = tcMar.find(qn(f'w:{m_name}'))
+        if node is None:
+            node = OxmlElement(f'w:{m_name}')
+            tcMar.append(node)
+        node.set(qn('w:w'), str(m_val))
+        node.set(qn('w:type'), 'dxa')
+
 def draw_custom_pie(ax, values, labels, fig_num=0):
     """饼图：短直线且不拐弯"""
     colors = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47']
@@ -124,7 +156,6 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
 
         # 图4、图5单独调整
         if fig_num == 5:
-            # 图5：B 级往左，A 级偏右，D 级保持左侧，并将 D 级引线改为水平
             if label.startswith('A'):
                 ha = "left"
                 x_text = max(x_text, 0.10) + 0.18
@@ -132,14 +163,12 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
                 display_label = label if label.endswith('级') else f"{label}级"
 
             elif label.startswith('B'):
-                # B 级往左
                 ha = "right"
                 x_text = min(x_text, -0.10) - 0.18
                 y_text = y_text + 0.02
                 display_label = label if label.endswith('级') else f"{label}级"
 
             elif label.startswith('D'):
-                # D 级：引线改成水平线
                 ha = "right"
                 x_text = x_text - 0.20
                 y_text = y
@@ -149,8 +178,6 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
                 ha = "left" if x > 0 else "right"
 
         elif fig_num == 4:
-            # 图4：不要只按 A/B/D 强行固定，按实际位置来
-            # 如果你的图4只有两个级别，这里保持更自然的左右分布
             ha = "left" if x > 0 else "right"
             if x > 0:
                 x_text = x_text + 0.10
@@ -162,7 +189,7 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
             ha = "left" if x > 0 else "right"
 
         connectionstyle = "arc3,rad=0"
-        label_text = f"{display_label}\n{int(values[i])} ({(values[i] / total * 100):.1f}%)"
+        label_text = f"{display_label}\n{int(values[i])}({(values[i] / total * 100):.1f}%)"
 
         ax.annotate(
             label_text,
@@ -178,7 +205,8 @@ def draw_custom_pie(ax, values, labels, fig_num=0):
                 connectionstyle=connectionstyle
             ),
             fontsize=14,
-            fontweight='bold'
+            fontweight='bold',
+            color='black'
         )
 
 def add_page_number(doc):
@@ -200,7 +228,8 @@ def process_smart(doc, text):
 
     def flush_table():
         nonlocal table_rows, current_title, is_chart_mode
-        if not table_rows: return
+        if not table_rows:
+            return
         
         raw_data = []
         for r in table_rows:
@@ -218,10 +247,13 @@ def process_smart(doc, text):
                     df = pd.DataFrame(raw_data[1:], columns=raw_data[0])
                     fig, ax = plt.subplots(figsize=(10, 6))
                     
-                    # 【需求 4：把所有图表的黑色边框去掉】
+                    # 去掉黑色边框
                     for spine in ax.spines.values():
                         spine.set_visible(False)
-                    
+
+                    # 坐标字号稍微调大
+                    ax.tick_params(axis='both', labelsize=13)
+
                     def clean(v):
                         s = re.sub(r'[^\d.]', '', str(v))
                         return float(s) if s else 0.0
@@ -235,7 +267,6 @@ def process_smart(doc, text):
 
                     # 2. 多系列分组柱状图 (2, 12)
                     elif current_num in [2, 12]:
-                        # 【需求 2：A级到F级指定的RGB颜色】
                         level_colors = {
                             'A': (229/255, 76/255, 94/255),
                             'B': (72/255, 116/255, 203/255),
@@ -248,18 +279,18 @@ def process_smart(doc, text):
                         x_labels = [re.sub(r'（.*?）|\(.*?\)|万元|项', '', str(x)) for x in df_plot.iloc[:, 0]]
                         categories = [c for c in df_plot.columns[1:] if '合计' not in c and c.strip()]
                         x = np.arange(len(x_labels))
-                        width = 0.8 / (len(categories) + 1)
+                        width = 0.65 / max(len(categories), 1)
                         
                         for i, cat in enumerate(categories):
                             vals = [clean(v) for v in df_plot[cat]]
                             c_key = cat.strip().upper()[0]
                             bar_color = level_colors.get(c_key, (72/255, 116/255, 203/255))
                             
-                            rects = ax.bar(x + i*width, vals, width, label=cat, color=bar_color)
-                            ax.bar_label(rects, padding=3, fontsize=12, fontweight='bold')
+                            rects = ax.bar(x + i * width, vals, width, label=cat, color=bar_color)
+                            ax.bar_label(rects, padding=3, fontsize=13, fontweight='bold', color='black')
                             
-                        ax.set_xticks(x + width*(len(categories)-1)/2)
-                        ax.set_xticklabels(x_labels)
+                        ax.set_xticks(x + width * (len(categories) - 1) / 2)
+                        ax.set_xticklabels(x_labels, fontsize=13)
                         ax.legend(loc='upper center', bbox_to_anchor=(0.5, -0.15), ncol=len(categories), frameon=False)
                         plt.subplots_adjust(bottom=0.2)
 
@@ -269,17 +300,16 @@ def process_smart(doc, text):
                         counts = [clean(v) for v in df.iloc[:, 1]]
                         fundings = [clean(v) for v in df.iloc[:, 2]]
                         
-                        bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.5)
-                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
+                        bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.42)
+                        ax.bar_label(bars, padding=3, fontsize=13, fontweight='bold', color='black')
                         
                         ax2 = ax.twinx()
                         for spine in ax2.spines.values():
                             spine.set_visible(False)
+                        ax2.tick_params(axis='y', labelsize=13)
                         
                         ax2.plot(years, fundings, color='#ED7D31', marker='o', linewidth=2, label='到账经费(万元)')
                         
-                        # 【修改重点：图9中的白色改成红色】
-                        # 原来是 white，现在改为 red，保持样式不变
                         for i, val in enumerate(fundings):
                             ax2.annotate(
                                 f'{val:.2f}',
@@ -288,12 +318,12 @@ def process_smart(doc, text):
                                 textcoords='offset points',
                                 ha='left',
                                 va='top',
-                                fontsize=12,
+                                fontsize=13,
                                 fontweight='bold',
-                                color='red',
+                                color='black',
                                 arrowprops=dict(
                                     arrowstyle='-',
-                                    color='red',
+                                    color='black',
                                     lw=1.5,
                                     shrinkA=0,
                                     shrinkB=0,
@@ -314,15 +344,15 @@ def process_smart(doc, text):
                         else:
                             x_labels = [re.sub(r'（.*?）|\(.*?\)|万元', '', str(x)) for x in df.iloc[:, 0]]
                             y_vals = [clean(v) for v in df.iloc[:, 1]]
-                        bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.5)
-                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
+                        bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.42)
+                        ax.bar_label(bars, padding=3, fontsize=13, fontweight='bold', color='black')
 
                     # 5. 普通柱状图
                     else:
                         x_labels = [str(x).replace('万元', '').strip() for x in df.iloc[:, 0]]
                         vals = [clean(v) for v in df.iloc[:, 1]]
-                        bars = ax.bar(x_labels, vals, color='#4472C4', width=0.5)
-                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
+                        bars = ax.bar(x_labels, vals, color='#4472C4', width=0.42)
+                        ax.bar_label(bars, padding=3, fontsize=13, fontweight='bold', color='black')
 
                     xy_labels = {
                         1: ('发表年份', '论文数量'),
@@ -337,8 +367,9 @@ def process_smart(doc, text):
                         12: ('年份', '获奖数量')
                     }
                     if current_num in xy_labels:
-                        ax.set_xlabel(xy_labels[current_num][0], fontweight='bold')
-                        ax.set_ylabel(xy_labels[current_num][1], fontweight='bold')
+                        ax.set_xlabel(xy_labels[current_num][0], fontweight='bold', fontsize=13, color='black')
+                        ax.set_ylabel(xy_labels[current_num][1], fontweight='bold', fontsize=13, color='black')
+                        ax.tick_params(axis='both', labelsize=13)
 
                     buf = io.BytesIO()
                     plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
@@ -351,7 +382,7 @@ def process_smart(doc, text):
                     p.paragraph_format.line_spacing = 1.5
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     run = p.add_run(current_title)
-                    set_font(run, 11, True)
+                    set_font(run, 11, True, "000000")
                 else:
                     # ================= 表格逻辑（不作任何简化） =================
                     if current_num in [11, 13, 14]:
@@ -387,6 +418,7 @@ def process_smart(doc, text):
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     table.allow_autofit = False
+                    set_table_width(table, width_cm=16.0)
 
                     for i, row_values in enumerate(raw_data):
                         table.rows[i].height = Cm(0.71)
@@ -403,13 +435,14 @@ def process_smart(doc, text):
                             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                             set_cell_shading(merged_cell, "4472C4")
-                            set_font(p.add_run(display_text), 11, True, "FFFFFF")
+                            set_cell_margins(merged_cell, top=0, start=0, bottom=0, end=0)
+                            set_font(p.add_run(display_text), 11, True, "000000")
                         else:
                             for j, val in enumerate(row_values):
                                 if j >= len(table.columns):
                                     break
                                 cell = table.cell(i, j)
-                                cell.text = str(val).replace('*','')
+                                cell.text = str(val).replace('*', '')
                                 header_text = str(raw_data[0][j])
                                 if "序号" in header_text:
                                     cell.width = Cm(1.0)
@@ -425,16 +458,17 @@ def process_smart(doc, text):
                                     cell.width = Cm(2.5)
 
                                 cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+                                set_cell_margins(cell, top=0, start=0, bottom=0, end=0)
                                 p = cell.paragraphs[0]
                                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                 if i == 0:
                                     set_cell_shading(cell, "4472C4")
-                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, True, "FFFFFF")
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, True, "000000")
                                 elif i % 2 == 0:
                                     set_cell_shading(cell, "D9E1F2")
-                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, False)
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, False, "000000")
                                 else:
-                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, False)
+                                    set_font(p.runs[0] if p.runs else p.add_run(str(val)), 10, False, "000000")
                     set_table_border(table)
             except Exception as e:
                 print(f"Error processing {current_title}: {e}")
@@ -453,12 +487,12 @@ def process_smart(doc, text):
                 if "附录" in l:
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(l.replace('#', '').strip())
-                set_font(run, 14, True)
+                set_font(run, 14, True, "000000")
             else:
                 p = doc.add_paragraph()
                 p.paragraph_format.line_spacing = 1.5
                 run = p.add_run(l.replace('#', '').strip())
-                set_font(run, 12, True)
+                set_font(run, 12, True, "000000")
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table()
             current_title = l.replace('*', '').strip()
@@ -468,7 +502,7 @@ def process_smart(doc, text):
                 p.paragraph_format.line_spacing = 1.5
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(current_title)
-                set_font(run, 11, True)
+                set_font(run, 11, True, "000000")
         elif l.startswith('|'):
             table_rows.append(l)
         else:
@@ -478,14 +512,15 @@ def process_smart(doc, text):
             p.paragraph_format.line_spacing = 1.5
             p.paragraph_format.first_line_indent = Pt(24)
             run = p.add_run(l.replace('**', ''))
-            set_font(run, 12)
+            set_font(run, 12, False, "000000")
     flush_table()
 
 def add_toc(doc):
     p = doc.add_paragraph()
     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = p.add_run("目  录")
-    set_font(run, size=16, bold=True)
+    run = p.add_run("目录")
+    set_font(run, size=16, bold=True, color="000000")
+
     p_toc = doc.add_paragraph()
     run_toc = p_toc.add_run()
     fldChar1 = OxmlElement('w:fldChar')
@@ -510,22 +545,35 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         update_fields = OxmlElement('w:updateFields')
         update_fields.set(qn('w:val'), 'true')
         element.append(update_fields)
+
+        # 页面边距保持统一，避免表格左右忽大忽小
+        section = doc.sections[0]
+        section.left_margin = Cm(2.0)
+        section.right_margin = Cm(2.0)
+        section.top_margin = Cm(2.5)
+        section.bottom_margin = Cm(2.0)
+
         for _ in range(4):
             doc.add_paragraph()
+
         p = doc.add_paragraph()
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = p.add_run("山东师范大学人文社会科学科研成果发展态势分析报告\n（2020-2024）")
-        set_font(run, size=22, bold=True)
+        set_font(run, size=22, bold=True, color="000000")
+
         doc.add_page_break()
         add_toc(doc)
         add_page_number(doc)
+
         for i in range(1, 9): 
             txt = getattr(input_data, f"ch{i}_text", "")
             if txt and txt.strip():
                 process_smart(doc, txt)
+
         if input_data.appendix and input_data.appendix.strip():
             doc.add_page_break()
             process_smart(doc, input_data.appendix)
+
         fname = f"report_{uuid.uuid4().hex[:8]}.docx"
         full_path = os.path.join("static", fname)
         doc.save(full_path)
