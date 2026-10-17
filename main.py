@@ -156,6 +156,21 @@ def style_data_source_paragraph(paragraph):
     paragraph.paragraph_format.first_line_indent = Pt(24)
 
 
+def apply_light_y_grid(fig, ax, grid_color="#D9D9D9", grid_width=1.0):
+    """给柱状图加浅色横向网格线（条纹效果），并隐藏刻度短线
+
+    - 只画 y 轴方向的网格线，x 轴保持干净
+    - set_axisbelow(True) 保证网格线在柱子下方，不会压住柱子
+    - 双轴图（twinx）的副轴网格全部关闭，避免出现重复线条
+    """
+    for a in fig.axes:
+        a.grid(False)
+        a.tick_params(axis='both', which='both', length=0)
+
+    ax.set_axisbelow(True)
+    ax.grid(axis='y', color=grid_color, linestyle='-', linewidth=grid_width, alpha=1.0)
+
+
 def draw_custom_pie(ax, values, labels, fig_num=0):
     """饼图：短直线且不拐弯"""
     colors = ['#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47']
@@ -388,6 +403,12 @@ def process_smart(doc, text):
                             tick.set_fontweight('bold')
                         for tick in ax.get_yticklabels():
                             tick.set_fontweight('bold')
+
+                    # ================= 新增：柱状图加浅色横向网格线（条纹） =================
+                    # 饼图（4、5）不加网格，其余柱状图/柱线组合图统一加
+                    if current_num not in [4, 5]:
+                        apply_light_y_grid(fig, ax, grid_color="#D9D9D9", grid_width=1.0)
+                    # ======================================================================
 
                     buf = io.BytesIO()
                     plt.savefig(buf, format='png', dpi=150, bbox_inches='tight')
