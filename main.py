@@ -22,11 +22,19 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
 
 
-app = FastAPI(openapi_version="3.0.0")
+app = FastAPI()
+app.openapi_version = "3.0.0"
 
 if not os.path.exists("static"):
     os.makedirs("static")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+# ================= 统一字号（五号 = 10.5pt） =================
+TABLE_FONT_SIZE = 10.5        # 表格内所有文字
+CAPTION_FONT_SIZE = 10.5      # 表标题 / 图标题
+BAR_LABEL_FONT_SIZE = 15      # 柱状图柱顶数字
+# ============================================================
 
 
 class ReportInput(BaseModel):
@@ -56,6 +64,63 @@ plt.rcParams['axes.labelweight'] = 'bold'
 plt.rcParams['axes.titleweight'] = 'bold'
 
 
+def tight_text(text):
+    """去掉中文与数字 / 字母之间多余的空格。
+
+    仅处理“中文 ↔ ASCII”的交界处，英文单词之间、纯英文句子的空格不受影响。
+    """
+    if not text:
+        return text
+    s = str(text)
+    # 中文（含全角标点）后面紧跟的数字 / 字母，去掉中间空格：“2816 篇” → “2816篇”
+    s = re.sub(
+        r'(?<=[\u3000-\u303f\u4e00-\u9fff，。、；：？！）】”’》])\s+(?=[0-9A-Za-z])',
+        '', s
+    )
+    # 数字 / 字母后面紧跟中文，去掉中间空格：“F 级” → “F级”、“2024 年” → “2024年”
+    s = re.sub(
+        r'(?<=[0-9A-Za-z%\)\]】])\s+(?=[\u4e00-\u9fff，。、；：？！（【“‘《])',
+        '', s
+    )
+    return s
+
+
+def disable_auto_space_between_ascii_and_cjk(doc):
+    """关闭 Word 默认在中文与西文 / 数字之间自动插入的间距。
+
+    Word 的 autoSpaceDE / autoSpaceDN 会在“中文+数字”之间凭空撑出空隙，
+    即使原文没有空格也会显示成“2816 篇”。在 docDefaults 里全局关掉。
+    """
+    try:
+        styles_el = doc.styles.element
+        doc_defaults = styles_el.find(qn('w:docDefaults'))
+        if doc_defaults is None:
+            return
+
+        ppr_default = doc_defaults.find(qn('w:pPrDefault'))
+        if ppr_default is None:
+            ppr_default = OxmlElement('w:pPrDefault')
+            doc_defaults.append(ppr_default)
+
+        ppr = ppr_default.find(qn('w:pPr'))
+        if ppr is None:
+            ppr = OxmlElement('w:pPr')
+            ppr_default.append(ppr)
+
+        spacing = ppr.find(qn('w:spacing'))
+        for tag in ('w:autoSpaceDE', 'w:autoSpaceDN'):
+            el = ppr.find(qn(tag))
+            if el is None:
+                el = OxmlElement(tag)
+                if spacing is not None:
+                    spacing.addprevious(el)
+                else:
+                    ppr.append(el)
+            el.set(qn('w:val'), '0')
+    except Exception as e:
+        print(f"Error disabling auto space: {e}")
+
+
 def set_font(run, size=12, bold=False, color=None):
     """设置字体、大小、加粗及颜色"""
     run.font.size = Pt(size)
@@ -70,13 +135,38 @@ def set_font(run, size=12, bold=False, color=None):
 
 
 def set_cell_shading(cell, color):
-    """设置单元格背景颜色"""
+    """设置单元格背景颜色（同色重复设置时直接更新，避免重复写入 w:shd）"""
     tcPr = cell._tc.get_or_add_tcPr()
-    shd = OxmlElement('w:shd')
+    shd = tcPr.find(qn('w:shd'))
+    if shd is None:
+        shd = OxmlElement('w:shd')
+        tcPr.append(shd)
     shd.set(qn('w:val'), 'clear')
     shd.set(qn('w:color'), 'auto')
     shd.set(qn('w:fill'), color)
-    tcPr.append(shd)
+
+
+def set_cell_bottom_border(cell, color="FFFFFF", size=12):
+    """给单元格加下边框（用于表 10 表头与下一行之间加白色分隔线）"""
+    tcPr = cell._tc.get_or_add_tcPr()
+    tcBorders = tcPr.find(qn('w:tcBorders'))
+    if tcBorders is None:
+        tcBorders = OxmlElement('w:tcBorders')
+        # tcBorders 必须排在 w:shd 之前，否则 Word 可能忽略
+        shd = tcPr.find(qn('w:shd'))
+        if shd is not None:
+            shd.addprevious(tcBorders)
+        else:
+            tcPr.append(tcBorders)
+
+    bottom = tcBorders.find(qn('w:bottom'))
+    if bottom is None:
+        bottom = OxmlElement('w:bottom')
+        tcBorders.append(bottom)
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), str(size))
+    bottom.set(qn('w:space'), '0')
+    bottom.set(qn('w:color'), color)
 
 
 def set_table_border_no_vertical(table):
@@ -319,7 +409,7 @@ def process_smart(doc, text):
                             c_key = str(cat).strip().upper()[0]
                             bar_color = level_colors.get(c_key, (72/255, 116/255, 203/255))
                             rects = ax.bar(x + i * width, vals, width, label=cat, color=bar_color)
-                            ax.bar_label(rects, padding=3, fontsize=12, fontweight='bold')
+                            ax.bar_label(rects, padding=3, fontsize=BAR_LABEL_FONT_SIZE, fontweight='bold')
 
                         ax.set_xticks(x + width * (len(categories) - 1) / 2)
                         ax.set_xticklabels(x_labels, fontsize=13, fontweight='bold')
@@ -332,7 +422,7 @@ def process_smart(doc, text):
                         fundings = [clean(v) for v in df.iloc[:, 2]]
 
                         bars = ax.bar(years, counts, color='#4472C4', label='立项数(项)', width=0.38)
-                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
+                        ax.bar_label(bars, padding=3, fontsize=BAR_LABEL_FONT_SIZE, fontweight='bold')
 
                         ax2 = ax.twinx()
                         for spine in ax2.spines.values():
@@ -375,13 +465,13 @@ def process_smart(doc, text):
                             y_vals = [clean(v) for v in df.iloc[:, 1]]
 
                         bars = ax.bar(x_labels, y_vals, color='#4472C4', width=0.38)
-                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
+                        ax.bar_label(bars, padding=3, fontsize=BAR_LABEL_FONT_SIZE, fontweight='bold')
 
                     else:
                         x_labels = [str(x).replace('万元', '').strip() for x in df.iloc[:, 0]]
                         vals = [clean(v) for v in df.iloc[:, 1]]
                         bars = ax.bar(x_labels, vals, color='#4472C4', width=0.38)
-                        ax.bar_label(bars, padding=3, fontsize=12, fontweight='bold')
+                        ax.bar_label(bars, padding=3, fontsize=BAR_LABEL_FONT_SIZE, fontweight='bold')
 
                     xy_labels = {
                         1: ('发表年份', '论文数量'),
@@ -415,13 +505,16 @@ def process_smart(doc, text):
                     plt.close()
                     buf.seek(0)
                     doc.add_picture(buf, width=Inches(5.6))
-                    doc.paragraphs[-1].alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    # 图片所在段落设为紧凑，消除图片与图标题之间的空隙
+                    pic_para = doc.paragraphs[-1]
+                    set_paragraph_compact(pic_para, line_spacing=1.0, before=0, after=0)
+                    pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
                     p = doc.add_paragraph()
                     set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     run = p.add_run(current_title)
-                    set_font(run, 11, True, "000000")
+                    set_font(run, CAPTION_FONT_SIZE, True, "000000")
 
                 else:
                     if current_num in [11, 13, 14]:
@@ -454,6 +547,18 @@ def process_smart(doc, text):
                                     new_table_data.append(left + right)
                         raw_data = new_table_data
 
+                    # ===== 表 9：两层表头（“认定等级”横跨 B~总计 六列）=====
+                    is_two_level_9 = (
+                        current_num == 9
+                        and not is_chart_mode
+                        and len(raw_data) > 1
+                        and len(raw_data[0]) >= 9
+                    )
+                    if is_two_level_9:
+                        _header9 = raw_data[0]
+                        raw_data = [_header9, [""] * len(_header9)] + raw_data[1:]
+                    # ========================================================
+
                     table = doc.add_table(rows=len(raw_data), cols=len(raw_data[0]))
                     table.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     table.autofit = True
@@ -465,12 +570,18 @@ def process_smart(doc, text):
                         set_table_row_height(row, 0.71)
 
                     for i, row_values in enumerate(raw_data):
+                        if is_two_level_9 and i == 1:
+                            # 第二层表头留空，稍后与第一层合并后单独写入
+                            continue
+
                         row_str = "".join([str(x) for x in row_values])
                         is_special_10 = ("B级" in row_str or "C级" in row_str) and current_num == 10
                         is_special_12 = ("国家级" in row_str or "省部级" in row_str) and current_num == 12 and len(set(row_values)) == 1
 
                         if is_special_10 or is_special_12:
-                            display_text = next((x for x in row_values if str(x).strip()), "").replace('*', '').strip()
+                            display_text = tight_text(
+                                next((x for x in row_values if str(x).strip()), "").replace('*', '').strip()
+                            )
                             merged_cell = table.cell(i, 0).merge(table.cell(i, len(row_values) - 1))
                             merged_cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                             set_cell_shading(merged_cell, "4472C4")
@@ -484,14 +595,14 @@ def process_smart(doc, text):
                             p.paragraph_format.line_spacing = 1.0
 
                             run = p.add_run(display_text)
-                            set_font(run, 11, True, "FFFFFF")
+                            set_font(run, TABLE_FONT_SIZE, True, "FFFFFF")
                         else:
                             for j, val in enumerate(row_values):
                                 if j >= len(table.columns):
                                     break
 
                                 cell = table.cell(i, j)
-                                cell.text = str(val).replace('*', '')
+                                cell.text = tight_text(str(val).replace('*', ''))
                                 cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
                                 p = cell.paragraphs[0]
@@ -501,24 +612,70 @@ def process_smart(doc, text):
                                 p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
                                 p.paragraph_format.line_spacing = 1.0
 
-                                # 为了尽量避免两行，表格字体略微缩小
                                 if i == 0:
                                     set_cell_shading(cell, "4472C4")
                                     if p.runs:
-                                        set_font(p.runs[0], 9, True, "FFFFFF")
+                                        set_font(p.runs[0], TABLE_FONT_SIZE, True, "FFFFFF")
                                     else:
-                                        set_font(p.add_run(str(val)), 9, True, "FFFFFF")
+                                        set_font(p.add_run(str(val)), TABLE_FONT_SIZE, True, "FFFFFF")
+                                    # 表 10：表头底部加白色横线，与下方分类行区分
+                                    if current_num == 10:
+                                        set_cell_bottom_border(cell, "FFFFFF", 12)
                                 elif i % 2 == 0:
                                     set_cell_shading(cell, "D9E1F2")
                                     if p.runs:
-                                        set_font(p.runs[0], 9, False, "000000")
+                                        set_font(p.runs[0], TABLE_FONT_SIZE, False, "000000")
                                     else:
-                                        set_font(p.add_run(str(val)), 9, False, "000000")
+                                        set_font(p.add_run(str(val)), TABLE_FONT_SIZE, False, "000000")
                                 else:
                                     if p.runs:
-                                        set_font(p.runs[0], 9, False, "000000")
+                                        set_font(p.runs[0], TABLE_FONT_SIZE, False, "000000")
                                     else:
-                                        set_font(p.add_run(str(val)), 9, False, "000000")
+                                        set_font(p.add_run(str(val)), TABLE_FONT_SIZE, False, "000000")
+
+                    # ===== 表 9 两层表头合并 =====
+                    if is_two_level_9:
+                        ncol = len(raw_data[0])
+                        header_row = raw_data[0]
+
+                        # 第一层：第 3 列起横向合并成“认定等级”
+                        span = table.cell(0, 3).merge(table.cell(0, ncol - 1))
+                        span.text = ""
+                        p = span.paragraphs[0]
+                        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                        p.paragraph_format.space_before = Pt(0)
+                        p.paragraph_format.space_after = Pt(0)
+                        p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                        p.paragraph_format.line_spacing = 1.0
+                        set_cell_shading(span, "4472C4")
+                        span.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+                        run = p.add_run("认定等级")
+                        set_font(run, TABLE_FONT_SIZE, True, "FFFFFF")
+
+                        # 前 3 列（序号 / 姓名 / 所属单位）纵向合并两行
+                        for c in range(3):
+                            merged = table.cell(0, c).merge(table.cell(1, c))
+                            merged.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+                            # 合并后 row1 的空段落会撑高行，删掉多余段落
+                            for extra in merged.paragraphs[1:]:
+                                extra._element.getparent().remove(extra._element)
+                            set_cell_shading(merged, "4472C4")
+
+                        # 第二层：B级 ~ 总计
+                        for j in range(3, ncol):
+                            cell = table.cell(1, j)
+                            cell.text = ""
+                            p = cell.paragraphs[0]
+                            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                            p.paragraph_format.space_before = Pt(0)
+                            p.paragraph_format.space_after = Pt(0)
+                            p.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+                            p.paragraph_format.line_spacing = 1.0
+                            set_cell_shading(cell, "4472C4")
+                            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+                            run = p.add_run(str(header_row[j]))
+                            set_font(run, TABLE_FONT_SIZE, True, "FFFFFF")
+                    # ==============================
 
                     set_table_border_no_vertical(table)
 
@@ -571,7 +728,8 @@ def process_smart(doc, text):
                 set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(current_title)
-                set_font(run, 11, True, "000000")
+                # 表标题：五号加粗
+                set_font(run, CAPTION_FONT_SIZE, True, "000000")
 
         elif l.startswith('|'):
             table_rows.append(l)
@@ -589,8 +747,13 @@ def process_smart(doc, text):
                 p.paragraph_format.space_after = Pt(0)
                 p.paragraph_format.first_line_indent = Pt(24)
 
-            run = p.add_run(l.replace('**', ''))
-            set_font(run, 12, False, "000000")
+            # “（1）”“（2）”这类小标题加粗
+            is_sub_heading = bool(
+                re.match(r'^[（(]\s*[0-9一二三四五六七八九十]+\s*[)）]', l)
+            ) or l.startswith('**')
+
+            run = p.add_run(tight_text(l.replace('**', '')))
+            set_font(run, 12, is_sub_heading, "000000")
 
     flush_table()
 
@@ -628,6 +791,9 @@ def add_toc(doc):
 async def generate_report_word(input_data: ReportInput, request: Request):
     try:
         doc = Document()
+
+        # 关闭 Word 中文与数字/字母之间的自动间距
+        disable_auto_space_between_ascii_and_cjk(doc)
 
         element = doc.settings.element
         update_fields = OxmlElement('w:updateFields')
