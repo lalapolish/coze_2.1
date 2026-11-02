@@ -225,6 +225,24 @@ def set_paragraph_compact(paragraph, line_spacing=1.0, before=0, after=0):
     paragraph.paragraph_format.line_spacing = line_spacing
 
 
+def set_paragraph_space_after_lines(paragraph, lines=0.5):
+    """按“行”设置段后间距（Word 里显示为“段后 0.5 行”）。
+
+    python-docx 的 space_after 只支持磅值（w:after），要精确表达“0.5 行”
+    必须写 w:afterLines（单位为 1/100 行），同时把 w:after 归零。
+    """
+    pPr = paragraph._p.get_or_add_pPr()
+    try:
+        spacing = pPr.get_or_add_spacing()
+    except Exception:
+        spacing = pPr.find(qn('w:spacing'))
+        if spacing is None:
+            spacing = OxmlElement('w:spacing')
+            pPr.append(spacing)
+    spacing.set(qn('w:after'), '0')
+    spacing.set(qn('w:afterLines'), str(int(round(lines * 100))))
+
+
 def set_cell_text_compact(cell, font_size=10, bold=False, color="000000"):
     """统一设置单元格内文字紧凑样式"""
     for p in cell.paragraphs:
@@ -512,6 +530,8 @@ def process_smart(doc, text):
 
                     p = doc.add_paragraph()
                     set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
+                    # 图标题：段后 0.5 行（段前保持 0）
+                    set_paragraph_space_after_lines(p, 0.5)
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     run = p.add_run(current_title)
                     set_font(run, CAPTION_FONT_SIZE, True, "000000")
