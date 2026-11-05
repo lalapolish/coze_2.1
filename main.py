@@ -856,6 +856,9 @@ def add_toc(doc):
 
     fldChar1 = OxmlElement('w:fldChar')
     fldChar1.set(qn('w:fldCharType'), 'begin')
+    # dirty="true"：把该域标记为“脏”，Word 打开文档时会自动重算，
+    # 不依赖用户右键“更新域”。
+    fldChar1.set(qn('w:dirty'), 'true')
 
     instrText = OxmlElement('w:instrText')
     instrText.set(qn('xml:space'), 'preserve')
@@ -865,7 +868,7 @@ def add_toc(doc):
     fldChar2.set(qn('w:fldCharType'), 'separate')
 
     hint_text = OxmlElement('w:t')
-    hint_text.text = "（请在此处右键单击，选择“更新域”以生成目录内容）"
+    hint_text.text = "（若此处为空，按 Ctrl+A 再按 F9 可刷新目录）"
 
     fldChar3 = OxmlElement('w:fldChar')
     fldChar3.set(qn('w:fldCharType'), 'end')
