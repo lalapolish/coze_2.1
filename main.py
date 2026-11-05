@@ -34,6 +34,7 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 TABLE_FONT_SIZE = 10.5        # 表格内所有文字
 CAPTION_FONT_SIZE = 10.5      # 表标题 / 图标题
 BAR_LABEL_FONT_SIZE = 15      # 柱状图柱顶数字
+BLOCK_SPACING_LINES = 0.5     # 图题 / 表题 / 表格与正文之间的统一间距（行）
 # ============================================================
 
 
@@ -121,6 +122,32 @@ def disable_auto_space_between_ascii_and_cjk(doc):
         print(f"Error disabling auto space: {e}")
 
 
+def enable_auto_update_fields(doc):
+    """让 Word 打开文档时自动更新域（目录页码）。
+
+    w:updateFields 在 settings.xml 中必须排在 w:hdrShapeDefaults / w:footnotePr /
+    w:endnotePr / w:compat 之前；直接 append 到末尾属于顺序非法，Word 会忽略，
+    表现为“目录是空的、必须手动右键更新域”。
+    """
+    try:
+        settings = doc.settings.element
+        el = settings.find(qn('w:updateFields'))
+        if el is None:
+            el = OxmlElement('w:updateFields')
+            anchor = None
+            for tag in ('w:hdrShapeDefaults', 'w:footnotePr', 'w:endnotePr', 'w:compat'):
+                anchor = settings.find(qn(tag))
+                if anchor is not None:
+                    break
+            if anchor is not None:
+                anchor.addprevious(el)
+            else:
+                settings.append(el)
+        el.set(qn('w:val'), 'true')
+    except Exception as e:
+        print(f"Error enabling updateFields: {e}")
+
+
 def set_font(run, size=12, bold=False, color=None):
     """设置字体、大小、加粗及颜色"""
     run.font.size = Pt(size)
@@ -147,7 +174,7 @@ def set_cell_shading(cell, color):
 
 
 def set_cell_bottom_border(cell, color="FFFFFF", size=12):
-    """给单元格加下边框（用于表 10 表头与下一行之间加白色分隔线）"""
+    """给单元格加下边框（表头与下一行之间加白色分隔线）"""
     tcPr = cell._tc.get_or_add_tcPr()
     tcBorders = tcPr.find(qn('w:tcBorders'))
     if tcBorders is None:
@@ -225,22 +252,35 @@ def set_paragraph_compact(paragraph, line_spacing=1.0, before=0, after=0):
     paragraph.paragraph_format.line_spacing = line_spacing
 
 
+def _get_spacing(paragraph):
+    """拿到 w:pPr/w:spacing，保证元素插入顺序合法"""
+    pPr = paragraph._p.get_or_add_pPr()
+    try:
+        return pPr.get_or_add_spacing()
+    except Exception:
+        spacing = pPr.find(qn('w:spacing'))
+        if spacing is None:
+            spacing = OxmlElement('w:spacing')
+            pPr.append(spacing)
+        return spacing
+
+
 def set_paragraph_space_after_lines(paragraph, lines=0.5):
     """按“行”设置段后间距（Word 里显示为“段后 0.5 行”）。
 
     python-docx 的 space_after 只支持磅值（w:after），要精确表达“0.5 行”
     必须写 w:afterLines（单位为 1/100 行），同时把 w:after 归零。
     """
-    pPr = paragraph._p.get_or_add_pPr()
-    try:
-        spacing = pPr.get_or_add_spacing()
-    except Exception:
-        spacing = pPr.find(qn('w:spacing'))
-        if spacing is None:
-            spacing = OxmlElement('w:spacing')
-            pPr.append(spacing)
+    spacing = _get_spacing(paragraph)
     spacing.set(qn('w:after'), '0')
     spacing.set(qn('w:afterLines'), str(int(round(lines * 100))))
+
+
+def set_paragraph_space_before_lines(paragraph, lines=0.5):
+    """按“行”设置段前间距（Word 里显示为“段前 0.5 行”）。"""
+    spacing = _get_spacing(paragraph)
+    spacing.set(qn('w:before'), '0')
+    spacing.set(qn('w:beforeLines'), str(int(round(lines * 100))))
 
 
 def set_cell_text_compact(cell, font_size=10, bold=False, color="000000"):
@@ -372,6 +412,8 @@ def process_smart(doc, text):
     lines = text.split('\n')
     table_rows, current_title, is_chart_mode = [], "", False
     in_data_source = False
+    # 记录上一个块类型，用于控制“表格之后”的段前间距
+    block_state = {"prev": None}
 
     def flush_table():
         nonlocal table_rows, current_title, is_chart_mode
@@ -527,14 +569,16 @@ def process_smart(doc, text):
                     pic_para = doc.paragraphs[-1]
                     set_paragraph_compact(pic_para, line_spacing=1.0, before=0, after=0)
                     pic_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                    block_state["prev"] = "figure"
 
                     p = doc.add_paragraph()
                     set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
                     # 图标题：段后 0.5 行（段前保持 0）
-                    set_paragraph_space_after_lines(p, 0.5)
+                    set_paragraph_space_after_lines(p, BLOCK_SPACING_LINES)
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                     run = p.add_run(current_title)
                     set_font(run, CAPTION_FONT_SIZE, True, "000000")
+                    block_state["prev"] = "figure_caption"
 
                 else:
                     if current_num in [11, 13, 14]:
@@ -567,7 +611,7 @@ def process_smart(doc, text):
                                     new_table_data.append(left + right)
                         raw_data = new_table_data
 
-                    # ===== 表 9：两层表头（“认定等级”横跨 B~总计 六列）=====
+                    # ===== 表 9：两层表头（“认定等级”横跨 B~F 五列，总计单独占两行）=====
                     is_two_level_9 = (
                         current_num == 9
                         and not is_chart_mode
@@ -638,8 +682,8 @@ def process_smart(doc, text):
                                         set_font(p.runs[0], TABLE_FONT_SIZE, True, "FFFFFF")
                                     else:
                                         set_font(p.add_run(str(val)), TABLE_FONT_SIZE, True, "FFFFFF")
-                                    # 表 10：表头底部加白色横线，与下方分类行区分
-                                    if current_num == 10:
+                                    # 表 10 / 表 12：表头底部加白色横线，与下方分类行区分
+                                    if current_num in (10, 12):
                                         set_cell_bottom_border(cell, "FFFFFF", 12)
                                 elif i % 2 == 0:
                                     set_cell_shading(cell, "D9E1F2")
@@ -657,9 +701,11 @@ def process_smart(doc, text):
                     if is_two_level_9:
                         ncol = len(raw_data[0])
                         header_row = raw_data[0]
+                        # “认定等级”只覆盖 B级 ~ F级，最后一列“总计”不并入
+                        level_end = ncol - 2
 
-                        # 第一层：第 3 列起横向合并成“认定等级”
-                        span = table.cell(0, 3).merge(table.cell(0, ncol - 1))
+                        # 第一层：第 3 列到倒数第 2 列横向合并成“认定等级”
+                        span = table.cell(0, 3).merge(table.cell(0, level_end))
                         span.text = ""
                         p = span.paragraphs[0]
                         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
@@ -671,9 +717,11 @@ def process_smart(doc, text):
                         span.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                         run = p.add_run("认定等级")
                         set_font(run, TABLE_FONT_SIZE, True, "FFFFFF")
+                        # “认定等级”单元格下加白色横线
+                        set_cell_bottom_border(span, "FFFFFF", 12)
 
-                        # 前 3 列（序号 / 姓名 / 所属单位）纵向合并两行
-                        for c in range(3):
+                        # 序号 / 姓名 / 所属单位 / 总计 四列纵向合并两行
+                        for c in (0, 1, 2, ncol - 1):
                             merged = table.cell(0, c).merge(table.cell(1, c))
                             merged.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
                             # 合并后 row1 的空段落会撑高行，删掉多余段落
@@ -681,8 +729,8 @@ def process_smart(doc, text):
                                 extra._element.getparent().remove(extra._element)
                             set_cell_shading(merged, "4472C4")
 
-                        # 第二层：B级 ~ 总计
-                        for j in range(3, ncol):
+                        # 第二层：B级 ~ F级
+                        for j in range(3, level_end + 1):
                             cell = table.cell(1, j)
                             cell.text = ""
                             p = cell.paragraphs[0]
@@ -698,6 +746,7 @@ def process_smart(doc, text):
                     # ==============================
 
                     set_table_border_no_vertical(table)
+                    block_state["prev"] = "table"
 
             except Exception as e:
                 print(f"Error processing {current_title}: {e}")
@@ -715,8 +764,11 @@ def process_smart(doc, text):
             in_data_source = True
             p = doc.add_paragraph()
             set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
+            if block_state["prev"] == "table":
+                set_paragraph_space_before_lines(p, BLOCK_SPACING_LINES)
             run = p.add_run(l)
             set_font(run, 14, True, "000000")
+            block_state["prev"] = "text"
             continue
 
         if l.startswith('#'):
@@ -730,13 +782,18 @@ def process_smart(doc, text):
                 p.paragraph_format.space_after = Pt(0)
                 if "附录" in l:
                     p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                if block_state["prev"] == "table":
+                    set_paragraph_space_before_lines(p, BLOCK_SPACING_LINES)
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 14, True, "000000")
             else:
                 p = doc.add_paragraph()
                 set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
+                if block_state["prev"] == "table":
+                    set_paragraph_space_before_lines(p, BLOCK_SPACING_LINES)
                 run = p.add_run(l.replace('#', '').strip())
                 set_font(run, 12, True, "000000")
+            block_state["prev"] = "heading"
 
         elif re.match(r'(\*\*?)?(附)?[图表]\s?[\d\-\.]+[:：\s]', l):
             flush_table()
@@ -746,10 +803,15 @@ def process_smart(doc, text):
             if not is_chart_mode:
                 p = doc.add_paragraph()
                 set_paragraph_compact(p, line_spacing=1.0, before=0, after=0)
+                # 表标题：段后 0.5 行
+                set_paragraph_space_after_lines(p, BLOCK_SPACING_LINES)
                 p.alignment = WD_ALIGN_PARAGRAPH.CENTER
                 run = p.add_run(current_title)
                 # 表标题：五号加粗
                 set_font(run, CAPTION_FONT_SIZE, True, "000000")
+                block_state["prev"] = "table_caption"
+            else:
+                block_state["prev"] = "figure_caption"
 
         elif l.startswith('|'):
             table_rows.append(l)
@@ -767,6 +829,10 @@ def process_smart(doc, text):
                 p.paragraph_format.space_after = Pt(0)
                 p.paragraph_format.first_line_indent = Pt(24)
 
+            # 表格与紧接其后的文字之间留 0.5 行
+            if block_state["prev"] == "table":
+                set_paragraph_space_before_lines(p, BLOCK_SPACING_LINES)
+
             # “（1）”“（2）”这类小标题加粗
             is_sub_heading = bool(
                 re.match(r'^[（(]\s*[0-9一二三四五六七八九十]+\s*[)）]', l)
@@ -774,6 +840,7 @@ def process_smart(doc, text):
 
             run = p.add_run(tight_text(l.replace('**', '')))
             set_font(run, 12, is_sub_heading, "000000")
+            block_state["prev"] = "text"
 
     flush_table()
 
@@ -815,10 +882,8 @@ async def generate_report_word(input_data: ReportInput, request: Request):
         # 关闭 Word 中文与数字/字母之间的自动间距
         disable_auto_space_between_ascii_and_cjk(doc)
 
-        element = doc.settings.element
-        update_fields = OxmlElement('w:updateFields')
-        update_fields.set(qn('w:val'), 'true')
-        element.append(update_fields)
+        # 打开文档时自动更新域（目录页码）；必须写在合法位置，否则 Word 忽略
+        enable_auto_update_fields(doc)
 
         for _ in range(4):
             doc.add_paragraph()
